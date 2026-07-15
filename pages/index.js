@@ -9,6 +9,7 @@ import {
   briefingNetworkFailure,
   briefingStreamFailure,
 } from "@/lib/briefing-client-error.mjs";
+import GeminiBriefingPanel from "@/components/gemini-briefing-panel";
 
 const MessageResponse = dynamic(
   () =>
@@ -407,12 +408,21 @@ export default function Home() {
                 items={items}
                 searchedFor={searchedFor}
               />
+
+              <GeminiBriefingPanel
+                key={`gemini-${briefingToken || `unavailable-${searchedFor}`}`}
+                briefingToken={briefingToken}
+                expiresAt={expiresAt}
+                items={items}
+              />
             </>
           )}
         </section>
 
         <footer className="footer">
-          <span>Powered by Naver Search API · Vercel AI Gateway</span>
+          <span>
+            Powered by Naver Search API · Vercel AI Gateway · Google Gemini API
+          </span>
         </footer>
       </div>
 
@@ -838,6 +848,287 @@ export default function Home() {
           text-decoration: underline;
         }
 
+        .gemini-briefing-panel {
+          margin-top: 24px;
+          border: 2px solid #175c56;
+          background: #fff;
+        }
+
+        .gemini-briefing-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 24px;
+          padding: 24px;
+          background: #eff8f5;
+          border-bottom: 1px solid #175c56;
+        }
+
+        .gemini-eyebrow {
+          display: block;
+          margin-bottom: 5px;
+          color: #175c56;
+          font-family: var(--font-mono);
+          font-size: 0.68rem;
+          font-weight: 700;
+          letter-spacing: 0.12em;
+        }
+
+        .gemini-briefing-heading h2 {
+          margin: 0 0 6px;
+          font-family: var(--font-display);
+          font-size: 1.45rem;
+        }
+
+        .gemini-briefing-heading p,
+        .gemini-briefing-notice {
+          margin: 0;
+          color: var(--ink-dim);
+          font-size: 0.86rem;
+          line-height: 1.5;
+        }
+
+        .gemini-briefing-button {
+          appearance: none;
+          flex: 0 0 auto;
+          min-width: 218px;
+          min-height: 48px;
+          padding: 12px 18px;
+          border: 2px solid var(--ink);
+          border-radius: 2px;
+          background: #175c56;
+          box-shadow: 3px 3px 0 var(--ink);
+          color: #fff;
+          cursor: pointer;
+          font-family: var(--font-body);
+          font-size: 0.9rem;
+          font-weight: 700;
+          line-height: 1.2;
+          transition:
+            background 0.15s ease,
+            box-shadow 0.15s ease,
+            transform 0.15s ease;
+        }
+
+        .gemini-briefing-button:hover:not(:disabled) {
+          background: #0f4944;
+          box-shadow: 4px 4px 0 var(--ink);
+          transform: translate(-1px, -1px);
+        }
+
+        .gemini-briefing-button:active:not(:disabled) {
+          box-shadow: 1px 1px 0 var(--ink);
+          transform: translate(2px, 2px);
+        }
+
+        .gemini-briefing-button:focus-visible {
+          outline: 3px solid #67c6bb;
+          outline-offset: 3px;
+        }
+
+        .gemini-briefing-button:disabled {
+          border-color: var(--ink-dim);
+          background: var(--ink-dim);
+          box-shadow: 2px 2px 0 var(--ink-dim);
+          cursor: default;
+          opacity: 0.75;
+        }
+
+        .gemini-data-notice {
+          padding: 16px 24px;
+          border-bottom: 1px solid #badbd6;
+          background: #f8fcfb;
+          color: #29524e;
+          font-size: 0.8rem;
+          line-height: 1.55;
+        }
+
+        .gemini-data-notice strong {
+          display: block;
+          margin-bottom: 3px;
+          font-family: var(--font-mono);
+          font-size: 0.72rem;
+          letter-spacing: 0.04em;
+        }
+
+        .gemini-data-notice p {
+          margin: 0;
+        }
+
+        .gemini-data-notice a {
+          color: #175c56;
+          font-weight: 700;
+        }
+
+        .gemini-briefing-notice,
+        .gemini-briefing-progress,
+        .gemini-briefing-output,
+        .gemini-briefing-sources {
+          padding: 20px 24px;
+        }
+
+        .gemini-briefing-progress {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: #175c56;
+          font-weight: 600;
+        }
+
+        .gemini-progress-dot {
+          width: 9px;
+          height: 9px;
+          border-radius: 50%;
+          background: #175c56;
+          animation: pulse 1.2s ease-in-out infinite;
+        }
+
+        .gemini-briefing-error {
+          margin: 20px 24px;
+          padding: 18px 20px;
+          border: 2px solid var(--wire-red);
+          background: #fff7f5;
+          box-shadow: 3px 3px 0
+            color-mix(in srgb, var(--wire-red) 28%, transparent);
+          color: var(--wire-red);
+        }
+
+        .gemini-briefing-error > strong {
+          display: block;
+          font-family: var(--font-display);
+          font-size: 1.08rem;
+        }
+
+        .gemini-briefing-error p {
+          margin: 6px 0 0;
+        }
+
+        .gemini-error-action {
+          display: inline-block;
+          margin-top: 14px;
+          padding: 9px 12px;
+          border: 1px solid currentColor;
+          background: #fff;
+          color: var(--wire-red);
+          font-size: 0.82rem;
+          font-weight: 700;
+          text-decoration: none;
+        }
+
+        .gemini-error-action:hover {
+          background: var(--wire-red);
+          color: #fff;
+        }
+
+        .gemini-error-meta {
+          display: grid;
+          gap: 7px;
+          margin: 16px 0 0;
+          padding-top: 14px;
+          border-top: 1px solid color-mix(in srgb, var(--wire-red) 35%, white);
+          color: var(--ink-dim);
+          font-size: 0.78rem;
+        }
+
+        .gemini-error-meta div {
+          display: grid;
+          grid-template-columns: 82px minmax(0, 1fr);
+          gap: 10px;
+        }
+
+        .gemini-error-meta dt {
+          color: var(--wire-red);
+          font-weight: 700;
+        }
+
+        .gemini-error-meta dd {
+          min-width: 0;
+          margin: 0;
+          overflow-wrap: anywhere;
+          font-family: var(--font-mono);
+        }
+
+        .gemini-briefing-error ul {
+          margin: 14px 0 0;
+          padding-left: 20px;
+          color: var(--ink-dim);
+        }
+
+        .gemini-briefing-error li + li {
+          margin-top: 8px;
+        }
+
+        .gemini-briefing-error .ready {
+          color: #2f6c43;
+          font-weight: 700;
+        }
+
+        .gemini-briefing-error .failed {
+          color: var(--wire-red);
+          font-weight: 700;
+        }
+
+        .gemini-briefing-output {
+          overflow-wrap: anywhere;
+          font-family: var(--font-body);
+          line-height: 1.75;
+        }
+
+        .gemini-briefing-output h2 {
+          margin-top: 1.8rem;
+          padding-bottom: 0.35rem;
+          border-bottom: 1px solid var(--rule);
+          font-family: var(--font-display);
+          font-size: 1.3rem;
+        }
+
+        .gemini-briefing-output h2:first-child {
+          margin-top: 0;
+        }
+
+        .gemini-briefing-output :global(ul) {
+          padding-left: 1.25rem;
+        }
+
+        .gemini-briefing-sources {
+          border-top: 1px solid #badbd6;
+          background: #f8fcfb;
+        }
+
+        .gemini-briefing-sources h3 {
+          margin: 0 0 12px;
+          font-family: var(--font-mono);
+          font-size: 0.76rem;
+          letter-spacing: 0.08em;
+        }
+
+        .gemini-briefing-sources ol {
+          margin: 0;
+          padding: 0;
+          list-style: none;
+        }
+
+        .gemini-briefing-sources li {
+          display: flex;
+          gap: 9px;
+          font-size: 0.86rem;
+          line-height: 1.45;
+        }
+
+        .gemini-briefing-sources li + li {
+          margin-top: 8px;
+        }
+
+        .gemini-briefing-sources span {
+          color: #175c56;
+          font-family: var(--font-mono);
+        }
+
+        .gemini-briefing-sources a:hover {
+          color: #175c56;
+          text-decoration: underline;
+        }
+
         .footer {
           margin-top: 48px;
           text-align: center;
@@ -865,6 +1156,14 @@ export default function Home() {
           }
 
           .briefing-button {
+            width: 100%;
+          }
+
+          .gemini-briefing-heading {
+            flex-direction: column;
+          }
+
+          .gemini-briefing-button {
             width: 100%;
           }
         }
@@ -903,6 +1202,21 @@ export default function Home() {
           }
 
           .briefing-error {
+            margin: 16px;
+            padding: 16px;
+          }
+
+          .gemini-briefing-heading,
+          .gemini-data-notice,
+          .gemini-briefing-notice,
+          .gemini-briefing-progress,
+          .gemini-briefing-output,
+          .gemini-briefing-sources {
+            padding-left: 17px;
+            padding-right: 17px;
+          }
+
+          .gemini-briefing-error {
             margin: 16px;
             padding: 16px;
           }
