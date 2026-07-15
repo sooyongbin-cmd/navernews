@@ -1,4 +1,13 @@
 import { createBriefingToken } from "@/lib/briefing-token.mjs";
+import {
+  SEARCH_CANDIDATE_COUNT,
+  SEARCH_RESULT_LIMIT,
+  selectExtractableSearchArticles,
+} from "@/lib/search-article-selection.mjs";
+
+export const config = {
+  maxDuration: 60,
+};
 
 function stripHtml(text = "") {
   return String(text)
@@ -53,7 +62,7 @@ export default async function handler(req, res) {
   const apiUrl = new URL("https://openapi.naver.com/v1/search/news.json");
   apiUrl.search = new URLSearchParams({
     query,
-    display: "3",
+    display: String(SEARCH_CANDIDATE_COUNT),
     start: "1",
     sort: "date",
   }).toString();
@@ -69,6 +78,7 @@ export default async function handler(req, res) {
       },
       signal: abortController.signal,
     });
+    clearTimeout(timeout);
 
     if (!naverResponse.ok) {
       return res.status(naverResponse.status).json({
@@ -77,24 +87,30 @@ export default async function handler(req, res) {
     }
 
     const data = await naverResponse.json();
-    const items = (data.items || []).slice(0, 3).map((item, index) => {
-      const originalLink = String(item.originallink ?? "").trim();
-      const naverLink = String(item.link ?? "").trim();
+    const candidates = (data.items || [])
+      .slice(0, SEARCH_CANDIDATE_COUNT)
+      .map((item, index) => {
+        const originalLink = String(item.originallink ?? "").trim();
+        const naverLink = String(item.link ?? "").trim();
 
-      return {
-        id: String(index + 1),
-        title: stripHtml(item.title),
-        description: stripHtml(item.description),
-        originalLink: isHttpUrl(originalLink) ? originalLink : "",
-        naverLink: isHttpUrl(naverLink) ? naverLink : "",
-        pubDate: item.pubDate,
-      };
-    });
+        return {
+          id: String(index + 1),
+          title: stripHtml(item.title),
+          description: stripHtml(item.description),
+          originalLink: isHttpUrl(originalLink) ? originalLink : "",
+          naverLink: isHttpUrl(naverLink) ? naverLink : "",
+          pubDate: item.pubDate,
+        };
+      });
+    const screening = await selectExtractableSearchArticles(candidates);
+    const items = screening.articles;
 
     let briefingToken = null;
     let expiresAt = null;
     const canCreateBriefing =
-      items.length === 3 && items.every((item) => item.originalLink);
+      screening.complete &&
+      items.length === SEARCH_RESULT_LIMIT &&
+      items.every((item) => item.originalLink);
 
     if (canCreateBriefing) {
       const signed = createBriefingToken({ query, articles: items });
@@ -107,6 +123,11 @@ export default async function handler(req, res) {
       items,
       briefingToken,
       expiresAt,
+      screening: {
+        checkedCount: screening.checkedCount,
+        excludedCount: screening.excludedCount,
+        complete: screening.complete,
+      },
     });
   } catch (error) {
     if (error?.name === "AbortError") {
@@ -120,7 +141,7 @@ export default async function handler(req, res) {
     }
 
     return res.status(500).json({
-      message: "뉴스 검색 중 서버 오류가 발생했습니다.",
+      message: "뉴스 검색 및 기사 전문 확인 중 서버 오류가 발생했습니다.",
     });
   } finally {
     clearTimeout(timeout);

@@ -156,7 +156,8 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
 
       {!briefingToken && (
         <p className="briefing-notice" role="status">
-          원문 링크가 있는 기사 3건이 모두 검색되어야 브리핑을 만들 수 있습니다.
+          검색 시점에 전문 확보를 통과한 기사 3건이 필요합니다. 다른 검색어로
+          다시 시도해 주세요.
         </p>
       )}
 
@@ -278,6 +279,11 @@ export default function Home() {
   const [searchedFor, setSearchedFor] = useState("");
   const [briefingToken, setBriefingToken] = useState(null);
   const [expiresAt, setExpiresAt] = useState(null);
+  const [screening, setScreening] = useState({
+    checkedCount: 0,
+    excludedCount: 0,
+    complete: false,
+  });
 
   const todayLabel = new Date().toLocaleDateString("ko-KR", {
     year: "numeric",
@@ -296,6 +302,7 @@ export default function Home() {
     setItems([]);
     setBriefingToken(null);
     setExpiresAt(null);
+    setScreening({ checkedCount: 0, excludedCount: 0, complete: false });
 
     try {
       const response = await fetch(
@@ -313,6 +320,11 @@ export default function Home() {
       setSearchedFor(data.query || normalizedQuery);
       setBriefingToken(data.briefingToken || null);
       setExpiresAt(data.expiresAt || null);
+      setScreening({
+        checkedCount: Number(data.screening?.checkedCount) || 0,
+        excludedCount: Number(data.screening?.excludedCount) || 0,
+        complete: data.screening?.complete === true,
+      });
       setStatus("done");
     } catch {
       setStatus("error");
@@ -326,7 +338,7 @@ export default function Home() {
         <title>뉴스와이어 — 네이버 뉴스 검색과 AI 브리핑</title>
         <meta
           name="description"
-          content="네이버 최신 뉴스 3건을 검색하고 기사 전문을 바탕으로 AI 종합 브리핑을 생성합니다."
+          content="네이버 최신 뉴스 중 전문 확보가 가능한 기사만 최대 3건 검색하고 AI 종합 브리핑을 생성합니다."
         />
       </Head>
 
@@ -335,7 +347,7 @@ export default function Home() {
           <div className="masthead-rule" />
           <h1>뉴스와이어</h1>
           <p className="dateline" suppressHydrationWarning>
-            {todayLabel} · 네이버 뉴스 최신 검색 결과 3건
+            {todayLabel} · 전문 확보 가능한 최신 뉴스 최대 3건
           </p>
           <div className="masthead-rule" />
         </header>
@@ -351,15 +363,22 @@ export default function Home() {
             onChange={(event) => setQuery(event.target.value)}
           />
           <button type="submit" disabled={status === "loading"}>
-            {status === "loading" ? "검색 중…" : "검색"}
+            {status === "loading" ? "전문 확인 중…" : "검색"}
           </button>
         </form>
 
         <section className="results" aria-live="polite">
           {status === "idle" && (
             <p className="hint">
-              키워드를 입력하면 발행 시각 기준 최신 뉴스 3건을 보여드립니다.
-              브리핑은 버튼을 눌렀을 때만 생성됩니다.
+              최신 뉴스 후보의 원문을 확인한 뒤, 전문 확보가 가능한 기사만 최대
+              3건 보여드립니다. 브리핑은 버튼을 눌렀을 때만 생성됩니다.
+            </p>
+          )}
+
+          {status === "loading" && (
+            <p className="hint search-progress" role="status">
+              최신 뉴스 후보에서 전문 확인이 가능한 기사를 선별하고 있습니다.
+              언론사 응답에 따라 최대 수십 초가 걸릴 수 있습니다.
             </p>
           )}
 
@@ -367,13 +386,28 @@ export default function Home() {
 
           {status === "done" && items.length === 0 && (
             <p className="hint">
-              &lsquo;{searchedFor}&rsquo;에 대한 검색 결과가 없습니다. 다른 키워드로
-              다시 검색해 보세요.
+              &lsquo;{searchedFor}&rsquo;의 최신 후보 {screening.checkedCount}건에서
+              전문을 확보할 수 있는 기사를 찾지 못했습니다. 다른 키워드로 다시
+              검색해 보세요.
             </p>
           )}
 
           {status === "done" && items.length > 0 && (
             <>
+              <div
+                className={`screening-summary${
+                  screening.complete ? "" : " screening-warning"
+                }`}
+                role="status"
+              >
+                <strong>검색 시점 전문 확인 완료</strong>
+                <p>
+                  최신 후보 {screening.checkedCount}건 중 전문을 확보한 기사
+                  {` ${items.length}건`}만 표시합니다.
+                  {!screening.complete &&
+                    " 3건이 확보되지 않아 AI 브리핑은 사용할 수 없습니다."}
+                </p>
+              </div>
               <ol className="news-list">
                 {items.map((item) => {
                   const articleLink = item.originalLink || item.naverLink;
@@ -385,6 +419,7 @@ export default function Home() {
                           <span className="source">{sourceOf(articleLink)}</span>
                           <span className="dot">·</span>
                           <span className="time">{formatPubDate(item.pubDate)}</span>
+                          <span className="availability">전문 확인</span>
                         </div>
                         <a
                           className="news-title"
@@ -535,9 +570,43 @@ export default function Home() {
           color: var(--ink-dim);
         }
 
+        .search-progress {
+          color: var(--wire-navy);
+          font-weight: 600;
+        }
+
         .error {
           color: var(--wire-red);
           font-weight: 600;
+        }
+
+        .screening-summary {
+          margin-bottom: 18px;
+          padding: 16px 18px;
+          border: 1px solid #7ab5ad;
+          border-left: 5px solid #175c56;
+          background: #f1f9f7;
+          color: #214d48;
+        }
+
+        .screening-summary strong {
+          display: block;
+          margin-bottom: 4px;
+          font-family: var(--font-display);
+          font-size: 1rem;
+        }
+
+        .screening-summary p {
+          margin: 0;
+          font-size: 0.84rem;
+          line-height: 1.55;
+        }
+
+        .screening-warning {
+          border-color: #c28a42;
+          border-left-color: #9b5d10;
+          background: #fff8ec;
+          color: #73450d;
         }
 
         .news-list {
@@ -575,6 +644,19 @@ export default function Home() {
           text-transform: uppercase;
           letter-spacing: 0.06em;
           margin-bottom: 6px;
+        }
+
+        .availability {
+          display: inline-block;
+          margin-left: 10px;
+          padding: 2px 6px;
+          border: 1px solid #7ab5ad;
+          background: #f1f9f7;
+          color: #175c56;
+          font-size: 0.65rem;
+          font-weight: 700;
+          letter-spacing: 0;
+          white-space: nowrap;
         }
 
         .dot {

@@ -12,6 +12,10 @@ import {
   BRIEFING_SYSTEM_PROMPT,
   buildBriefingPrompt,
 } from "../lib/briefing-prompt.mjs";
+import {
+  SEARCH_CANDIDATE_COUNT,
+  SEARCH_RESULT_LIMIT,
+} from "../lib/search-article-selection.mjs";
 
 test("세 기사 전문을 각각 한 번씩 한 프롬프트에 포함한다", () => {
   const markers = ["FULL-TEXT-ONE", "FULL-TEXT-TWO", "FULL-TEXT-THREE"];
@@ -55,11 +59,13 @@ test("카드 확인이 필요한 403을 인증 오류와 구분한다", () => {
   assert.equal(aiErrorCode({ statusCode: 403 }), "AI_GATEWAY_AUTH_ERROR");
 });
 
-test("검색 API는 네이버 결과를 3건으로 제한한다", () => {
+test("검색 API는 후보 10건 중 전문 확인된 결과를 최대 3건 선별한다", () => {
   const source = readFileSync(
     new URL("../pages/api/search.js", import.meta.url),
     "utf8"
   );
-  assert.match(source, /display:\s*"3"/);
-  assert.doesNotMatch(source, /display=10/);
+  assert.equal(SEARCH_CANDIDATE_COUNT, 10);
+  assert.equal(SEARCH_RESULT_LIMIT, 3);
+  assert.match(source, /display:\s*String\(SEARCH_CANDIDATE_COUNT\)/);
+  assert.match(source, /selectExtractableSearchArticles\(candidates\)/);
 });

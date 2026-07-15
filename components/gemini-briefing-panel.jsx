@@ -177,8 +177,8 @@ export default function GeminiBriefingPanel({
 
       {!briefingToken && (
         <p className="gemini-briefing-notice" role="status">
-          원문 링크가 있는 기사 3건이 모두 검색되어야 Gemini 브리핑을 만들 수
-          있습니다.
+          검색 시점에 전문 확보를 통과한 기사 3건이 필요합니다. 다른 검색어로
+          다시 시도해 주세요.
         </p>
       )}
 
