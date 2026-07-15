@@ -2,7 +2,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import dynamic from "next/dynamic";
 import Head from "next/head";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   briefingFailureFromResponse,
@@ -10,6 +10,15 @@ import {
   briefingStreamFailure,
 } from "@/lib/briefing-client-error.mjs";
 import GeminiBriefingPanel from "@/components/gemini-briefing-panel";
+import {
+  geminiFailureFromResponse,
+  geminiNetworkFailure,
+  geminiStreamFailure,
+} from "@/lib/gemini-client-error.mjs";
+import {
+  consumeGeminiSse,
+  GeminiSseError,
+} from "@/lib/gemini-sse-client.mjs";
 
 const MessageResponse = dynamic(
   () =>
@@ -49,6 +58,29 @@ function latestAssistantText(messages) {
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("");
+}
+
+function geminiResponseMetadata(response) {
+  return {
+    status: response.status,
+    statusText: response.statusText || null,
+    requestId:
+      response.headers.get("x-briefing-request-id") ||
+      response.headers.get("x-vercel-id") ||
+      response.headers.get("x-request-id") ||
+      null,
+    responseType:
+      response.headers.get("content-type")?.split(";", 1)[0] || null,
+  };
+}
+
+function emptyGeminiBriefing(status = "idle") {
+  return {
+    status,
+    briefingText: "",
+    infographic: null,
+    failure: null,
+  };
 }
 
 function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
@@ -284,6 +316,17 @@ export default function Home() {
     excludedCount: 0,
     complete: false,
   });
+  const [geminiBriefing, setGeminiBriefing] = useState(() =>
+    emptyGeminiBriefing()
+  );
+  const searchControllerRef = useRef(null);
+
+  useEffect(
+    () => () => {
+      searchControllerRef.current?.abort();
+    },
+    []
+  );
 
   const todayLabel = new Date().toLocaleDateString("ko-KR", {
     year: "numeric",
@@ -299,36 +342,106 @@ export default function Home() {
 
     setStatus("loading");
     setErrorMessage("");
+    setSearchedFor(normalizedQuery);
     setItems([]);
     setBriefingToken(null);
     setExpiresAt(null);
     setScreening({ checkedCount: 0, excludedCount: 0, complete: false });
+    setGeminiBriefing(emptyGeminiBriefing("searching"));
+
+    searchControllerRef.current?.abort();
+    const controller = new AbortController();
+    searchControllerRef.current = controller;
+    let searchReceived = false;
+    let metadata = {};
 
     try {
-      const response = await fetch(
-        `/api/search?query=${encodeURIComponent(normalizedQuery)}`
-      );
-      const data = await response.json();
+      const response = await fetch("/api/gemini-briefing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: normalizedQuery }),
+        signal: controller.signal,
+      });
+      metadata = geminiResponseMetadata(response);
 
       if (!response.ok) {
+        const failure = await geminiFailureFromResponse(response);
         setStatus("error");
-        setErrorMessage(data.message || "뉴스 검색 중 오류가 발생했습니다.");
+        setErrorMessage(failure.message);
+        setGeminiBriefing({
+          ...emptyGeminiBriefing("error"),
+          failure,
+        });
         return;
       }
 
-      setItems(data.items || []);
-      setSearchedFor(data.query || normalizedQuery);
-      setBriefingToken(data.briefingToken || null);
-      setExpiresAt(data.expiresAt || null);
-      setScreening({
-        checkedCount: Number(data.screening?.checkedCount) || 0,
-        excludedCount: Number(data.screening?.excludedCount) || 0,
-        complete: data.screening?.complete === true,
+      if (metadata.responseType !== "text/event-stream") {
+        throw new GeminiSseError({
+          code: "GEMINI_STREAM_PROTOCOL_ERROR",
+          message: "자동 검색 브리핑 서버가 스트리밍 응답을 반환하지 않았습니다.",
+          status: response.status,
+          requestId: metadata.requestId,
+        });
+      }
+
+      const completion = await consumeGeminiSse(response, {
+        onSearch(data) {
+          if (searchControllerRef.current !== controller) return;
+          searchReceived = true;
+          const nextItems = data.items || [];
+          const nextScreening = {
+            checkedCount: Number(data.screening?.checkedCount) || 0,
+            excludedCount: Number(data.screening?.excludedCount) || 0,
+            complete: data.screening?.complete === true,
+          };
+          setItems(nextItems);
+          setSearchedFor(data.query || normalizedQuery);
+          setBriefingToken(data.briefingToken || null);
+          setExpiresAt(data.expiresAt || null);
+          setScreening(nextScreening);
+          setStatus("done");
+          setGeminiBriefing(
+            emptyGeminiBriefing(
+              nextScreening.complete && nextItems.length === 3
+                ? "streaming"
+                : "skipped"
+            )
+          );
+        },
+        onDelta(text) {
+          if (searchControllerRef.current !== controller) return;
+          setGeminiBriefing((current) => ({
+            ...current,
+            status: "streaming",
+            briefingText: current.briefingText + text,
+          }));
+        },
+        onInfographic(infographic) {
+          if (searchControllerRef.current !== controller) return;
+          setGeminiBriefing((current) => ({ ...current, infographic }));
+        },
       });
-      setStatus("done");
-    } catch {
-      setStatus("error");
-      setErrorMessage("네트워크 오류로 검색하지 못했습니다. 다시 시도해 주세요.");
+      if (searchControllerRef.current === controller && !completion.skipped) {
+        setGeminiBriefing((current) => ({ ...current, status: "done" }));
+      }
+    } catch (error) {
+      if (searchControllerRef.current !== controller) return;
+      const failure =
+        error instanceof GeminiSseError
+          ? geminiStreamFailure(error, metadata)
+          : geminiNetworkFailure(error);
+      if (!searchReceived) {
+        setStatus("error");
+        setErrorMessage(failure.message);
+      }
+      setGeminiBriefing({
+        ...emptyGeminiBriefing("error"),
+        failure,
+      });
+    } finally {
+      if (searchControllerRef.current === controller) {
+        searchControllerRef.current = null;
+      }
     }
   }
 
@@ -371,14 +484,14 @@ export default function Home() {
           {status === "idle" && (
             <p className="hint">
               최신 뉴스 후보의 원문을 확인한 뒤, 전문 확보가 가능한 기사만 최대
-              3건 보여드립니다. 브리핑은 버튼을 눌렀을 때만 생성됩니다.
+              3건 보여드립니다. 3건이 확보되면 Gemini 브리핑을 자동 생성합니다.
             </p>
           )}
 
           {status === "loading" && (
             <p className="hint search-progress" role="status">
               최신 뉴스 후보에서 전문 확인이 가능한 기사를 선별하고 있습니다.
-              언론사 응답에 따라 최대 수십 초가 걸릴 수 있습니다.
+              3건이 확보되면 같은 전문으로 Gemini 브리핑을 바로 생성합니다.
             </p>
           )}
 
@@ -445,10 +558,12 @@ export default function Home() {
               />
 
               <GeminiBriefingPanel
-                key={`gemini-${briefingToken || `unavailable-${searchedFor}`}`}
-                briefingToken={briefingToken}
-                expiresAt={expiresAt}
+                key={`gemini-${searchedFor}`}
                 items={items}
+                status={geminiBriefing.status}
+                briefingText={geminiBriefing.briefingText}
+                infographic={geminiBriefing.infographic}
+                failure={geminiBriefing.failure}
               />
             </>
           )}
@@ -970,50 +1085,38 @@ export default function Home() {
           line-height: 1.5;
         }
 
-        .gemini-briefing-button {
-          appearance: none;
+        .gemini-auto-status {
           flex: 0 0 auto;
-          min-width: 218px;
-          min-height: 48px;
-          padding: 12px 18px;
-          border: 2px solid var(--ink);
-          border-radius: 2px;
+          min-width: 126px;
+          padding: 10px 14px;
+          border: 1px solid #175c56;
           background: #175c56;
-          box-shadow: 3px 3px 0 var(--ink);
           color: #fff;
-          cursor: pointer;
-          font-family: var(--font-body);
-          font-size: 0.9rem;
+          font-family: var(--font-mono);
+          font-size: 0.76rem;
           font-weight: 700;
+          letter-spacing: 0.04em;
           line-height: 1.2;
-          transition:
-            background 0.15s ease,
-            box-shadow 0.15s ease,
-            transform 0.15s ease;
+          text-align: center;
         }
 
-        .gemini-briefing-button:hover:not(:disabled) {
-          background: #0f4944;
-          box-shadow: 4px 4px 0 var(--ink);
-          transform: translate(-1px, -1px);
+        .gemini-auto-status-streaming {
+          animation: pulse 1.2s ease-in-out infinite;
         }
 
-        .gemini-briefing-button:active:not(:disabled) {
-          box-shadow: 1px 1px 0 var(--ink);
-          transform: translate(2px, 2px);
+        .gemini-auto-status-done {
+          background: #2f6c43;
+          border-color: #2f6c43;
         }
 
-        .gemini-briefing-button:focus-visible {
-          outline: 3px solid #67c6bb;
-          outline-offset: 3px;
+        .gemini-auto-status-error {
+          background: var(--wire-red);
+          border-color: var(--wire-red);
         }
 
-        .gemini-briefing-button:disabled {
-          border-color: var(--ink-dim);
-          background: var(--ink-dim);
-          box-shadow: 2px 2px 0 var(--ink-dim);
-          cursor: default;
-          opacity: 0.75;
+        .gemini-auto-status-skipped {
+          background: #9b5d10;
+          border-color: #9b5d10;
         }
 
         .gemini-data-notice {
@@ -1325,8 +1428,8 @@ export default function Home() {
             flex-direction: column;
           }
 
-          .gemini-briefing-button {
-            width: 100%;
+          .gemini-auto-status {
+            align-self: stretch;
           }
 
           .gemini-infographic-heading {

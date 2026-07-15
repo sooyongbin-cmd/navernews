@@ -35,6 +35,7 @@ function responseFromChunks(chunks) {
 
 test("분할된 SSE 델타를 순서대로 합치고 완료 이벤트를 반환한다", async () => {
   const response = responseFromChunks([
+    'event: search\ndata: {"query":"AI","items":[{"id":"1"},{"id":"2"},{"id":"3"}],"screening":{"complete":true}}\n\n',
     'event: delta\ndata: {"text":"첫째 "}\n',
     '\nevent: delta\ndata: {"text":"둘째"}\n\n',
     `event: infographic\ndata: ${JSON.stringify({ infographic: INFOGRAPHIC })}\n\n`,
@@ -42,8 +43,12 @@ test("분할된 SSE 델타를 순서대로 합치고 완료 이벤트를 반환�
   ]);
   let text = "";
   let infographic = null;
+  let search = null;
 
   const completion = await consumeGeminiSse(response, {
+    onSearch(value) {
+      search = value;
+    },
     onDelta(delta) {
       text += delta;
     },
@@ -54,8 +59,29 @@ test("분할된 SSE 델타를 순서대로 합치고 완료 이벤트를 반환�
 
   assert.equal(text, "첫째 둘째");
   assert.equal(completion.requestId, "req-1");
+  assert.equal(search.query, "AI");
+  assert.equal(search.items.length, 3);
+  assert.equal(completion.search.query, "AI");
   assert.deepEqual(infographic, INFOGRAPHIC);
   assert.deepEqual(completion.infographic, INFOGRAPHIC);
+});
+
+test("전문 확보가 3건 미만이면 인포그래픽 없이 자동 브리핑을 생략한다", async () => {
+  const response = responseFromChunks([
+    'event: search\ndata: {"query":"제한","items":[{"id":"1"},{"id":"2"}],"screening":{"complete":false}}\n\n',
+    'event: complete\ndata: {"requestId":"req-skip","skipped":true}\n\n',
+  ]);
+  let search = null;
+
+  const completion = await consumeGeminiSse(response, {
+    onSearch(value) {
+      search = value;
+    },
+  });
+
+  assert.equal(search.items.length, 2);
+  assert.equal(completion.skipped, true);
+  assert.equal(completion.infographic, null);
 });
 
 test("SSE 오류 이벤트의 상세 정보를 보존한다", async () => {

@@ -14,6 +14,7 @@ import {
   geminiTextDelta,
   hasRequiredSourceCitations,
   startGeminiBriefing,
+  startGeminiBriefingFromExtractedArticles,
 } from "@/lib/gemini-briefing.mjs";
 import {
   geminiErrorCode,
@@ -24,11 +25,18 @@ import {
   createGeminiInfographicSplitter,
   parseGeminiInfographicBlock,
 } from "@/lib/gemini-infographic.mjs";
-import { BriefingTokenError } from "@/lib/briefing-token.mjs";
+import {
+  BriefingTokenError,
+  createBriefingToken,
+} from "@/lib/briefing-token.mjs";
+import {
+  NewsSearchError,
+  searchExtractableNews,
+} from "@/lib/news-search.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store",
@@ -224,6 +232,167 @@ function streamGeminiResponse(stream, requestId) {
   });
 }
 
+function automaticStreamError(error, requestId) {
+  if (error instanceof NewsSearchError) {
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.status,
+      requestId,
+    };
+  }
+
+  if (error instanceof GeminiConfigurationError) {
+    return {
+      code: error.code,
+      message: error.message,
+      status: 500,
+      requestId,
+    };
+  }
+
+  if (error instanceof BriefingTokenError) {
+    return {
+      code: error.code,
+      message: error.message,
+      status: error.status,
+      requestId,
+    };
+  }
+
+  const providerStatus = geminiErrorStatus(error);
+  if (providerStatus) {
+    const code =
+      providerStatus === 429
+        ? "GEMINI_FREE_QUOTA_EXHAUSTED"
+        : providerStatus === 401 || providerStatus === 403
+          ? "GEMINI_AUTH_ERROR"
+          : providerStatus === 504
+            ? "GEMINI_TIMEOUT"
+            : "GEMINI_UPSTREAM_ERROR";
+    return {
+      code,
+      providerCode: error?.providerCode || error?.code || null,
+      message: publicGeminiErrorMessage(error),
+      status:
+        providerStatus === 429 ||
+        providerStatus === 401 ||
+        providerStatus === 403 ||
+        providerStatus === 504
+          ? providerStatus
+          : 502,
+      requestId,
+    };
+  }
+
+  return {
+    code: "GEMINI_BRIEFING_SERVER_ERROR",
+    message:
+      "자동 Gemini 브리핑 서버 함수 내부에서 오류가 발생했습니다. 요청 ID로 서버 로그를 확인해 주세요.",
+    status: 500,
+    requestId,
+  };
+}
+
+function streamAutomaticGeminiSearch(query, requestId, requestSignal) {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({
+    async start(controller) {
+      try {
+        const search = await searchExtractableNews(query, {
+          signal: requestSignal,
+        });
+        const items = search.articles;
+        let briefingToken = null;
+        let expiresAt = null;
+
+        if (search.complete) {
+          const signed = createBriefingToken({
+            query: search.query,
+            articles: items,
+          });
+          briefingToken = signed.token;
+          expiresAt = signed.expiresAt;
+        }
+
+        controller.enqueue(
+          encoder.encode(
+            sseEvent("search", {
+              query: search.query,
+              items,
+              briefingToken,
+              expiresAt,
+              screening: {
+                checkedCount: search.checkedCount,
+                excludedCount: search.excludedCount,
+                complete: search.complete,
+              },
+            })
+          )
+        );
+
+        if (!search.complete) {
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("complete", { requestId, skipped: true })
+            )
+          );
+          return;
+        }
+
+        const model = configuredModel();
+        const client = getGeminiClient();
+        const { stream } = await startGeminiBriefingFromExtractedArticles({
+          query: search.query,
+          articles: search.extractedArticles,
+          createInteraction({ prompt }) {
+            return client.interactions.create(
+              buildGeminiInteractionRequest({ model, prompt }),
+              {
+                timeout: GEMINI_MODEL_TIMEOUT_MS,
+                fetchOptions: { signal: requestSignal },
+                maxRetries: 0,
+              }
+            );
+          },
+        });
+        const geminiResponse = streamGeminiResponse(stream, requestId);
+        const reader = geminiResponse.body.getReader();
+
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      } catch (error) {
+        const details = automaticStreamError(error, requestId);
+        console.error("[gemini-briefing] automatic search failed", {
+          requestId,
+          code: details.code,
+          providerCode: details.providerCode || null,
+          name: error?.name || "UnknownError",
+          status: details.status,
+        });
+        controller.enqueue(encoder.encode(sseEvent("error", details)));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(body, {
+    headers: responseHeaders(requestId, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    }),
+  });
+}
+
 export async function POST(request) {
   const requestId = randomUUID();
   let requestBody;
@@ -237,6 +406,22 @@ export async function POST(request) {
       "요청 형식이 올바르지 않습니다.",
       requestId
     );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(requestBody || {}, "query")) {
+    const query = String(requestBody?.query ?? "").trim();
+    if (!query || query.length > 100) {
+      return jsonError(
+        400,
+        "INVALID_SEARCH_QUERY",
+        query
+          ? "검색어는 100자 이내로 입력해 주세요."
+          : "검색어를 입력해 주세요.",
+        requestId
+      );
+    }
+
+    return streamAutomaticGeminiSearch(query, requestId, request.signal);
   }
 
   try {

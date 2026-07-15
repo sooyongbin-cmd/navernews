@@ -46,6 +46,13 @@ test("최신 후보 중 전문 추출에 성공한 기사만 3건 선별한다",
   );
   assert.ok(selection.articles.every((article) => article.fullTextAvailable));
   assert.ok(selection.articles.every((article) => !("text" in article)));
+  assert.deepEqual(
+    selection.extractedArticles.map((article) => article.title),
+    ["후보 기사 3", "후보 기사 4", "후보 기사 5"]
+  );
+  assert.ok(
+    selection.extractedArticles.every((article) => article.text.length === 600)
+  );
 });
 
 test("후보를 모두 확인해도 3건이 안 되면 확보된 기사만 반환한다", async () => {

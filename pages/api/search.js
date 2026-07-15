@@ -1,35 +1,15 @@
 import { createBriefingToken } from "@/lib/briefing-token.mjs";
 import {
-  SEARCH_CANDIDATE_COUNT,
+  NewsSearchError,
+  searchExtractableNews,
+} from "@/lib/news-search.mjs";
+import {
   SEARCH_RESULT_LIMIT,
-  selectExtractableSearchArticles,
 } from "@/lib/search-article-selection.mjs";
 
 export const config = {
   maxDuration: 60,
 };
-
-function stripHtml(text = "") {
-  return String(text)
-    .replace(/<[^>]*>/g, "")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, value) => String.fromCodePoint(Number(value)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, value) =>
-      String.fromCodePoint(Number.parseInt(value, 16))
-    );
-}
-
-function isHttpUrl(value) {
-  try {
-    return ["http:", "https:"].includes(new URL(value).protocol);
-  } catch {
-    return false;
-  }
-}
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
@@ -50,59 +30,8 @@ export default async function handler(req, res) {
       .json({ message: "검색어는 100자 이내로 입력해 주세요." });
   }
 
-  const clientId = process.env.NAVER_CLIENT_ID;
-  const clientSecret = process.env.NAVER_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    return res.status(500).json({
-      message:
-        "NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 환경 변수를 설정해 주세요.",
-    });
-  }
-
-  const apiUrl = new URL("https://openapi.naver.com/v1/search/news.json");
-  apiUrl.search = new URLSearchParams({
-    query,
-    display: String(SEARCH_CANDIDATE_COUNT),
-    start: "1",
-    sort: "date",
-  }).toString();
-
-  const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), 8_000);
-
   try {
-    const naverResponse = await fetch(apiUrl, {
-      headers: {
-        "X-Naver-Client-Id": clientId,
-        "X-Naver-Client-Secret": clientSecret,
-      },
-      signal: abortController.signal,
-    });
-    clearTimeout(timeout);
-
-    if (!naverResponse.ok) {
-      return res.status(naverResponse.status).json({
-        message: "네이버 뉴스 검색에 실패했습니다. 잠시 후 다시 시도해 주세요.",
-      });
-    }
-
-    const data = await naverResponse.json();
-    const candidates = (data.items || [])
-      .slice(0, SEARCH_CANDIDATE_COUNT)
-      .map((item, index) => {
-        const originalLink = String(item.originallink ?? "").trim();
-        const naverLink = String(item.link ?? "").trim();
-
-        return {
-          id: String(index + 1),
-          title: stripHtml(item.title),
-          description: stripHtml(item.description),
-          originalLink: isHttpUrl(originalLink) ? originalLink : "",
-          naverLink: isHttpUrl(naverLink) ? naverLink : "",
-          pubDate: item.pubDate,
-        };
-      });
-    const screening = await selectExtractableSearchArticles(candidates);
+    const screening = await searchExtractableNews(query);
     const items = screening.articles;
 
     let briefingToken = null;
@@ -130,9 +59,10 @@ export default async function handler(req, res) {
       },
     });
   } catch (error) {
-    if (error?.name === "AbortError") {
-      return res.status(504).json({
-        message: "네이버 뉴스 검색 응답 시간이 초과되었습니다.",
+    if (error instanceof NewsSearchError) {
+      return res.status(error.status).json({
+        code: error.code,
+        message: error.message,
       });
     }
 
@@ -143,7 +73,5 @@ export default async function handler(req, res) {
     return res.status(500).json({
       message: "뉴스 검색 및 기사 전문 확인 중 서버 오류가 발생했습니다.",
     });
-  } finally {
-    clearTimeout(timeout);
   }
 }

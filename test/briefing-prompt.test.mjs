@@ -60,12 +60,17 @@ test("카드 확인이 필요한 403을 인증 오류와 구분한다", () => {
 });
 
 test("검색 API는 후보 10건 중 전문 확인된 결과를 최대 3건 선별한다", () => {
-  const source = readFileSync(
+  const searchSource = readFileSync(
+    new URL("../lib/news-search.mjs", import.meta.url),
+    "utf8"
+  );
+  const apiSource = readFileSync(
     new URL("../pages/api/search.js", import.meta.url),
     "utf8"
   );
   assert.equal(SEARCH_CANDIDATE_COUNT, 10);
   assert.equal(SEARCH_RESULT_LIMIT, 3);
-  assert.match(source, /display:\s*String\(SEARCH_CANDIDATE_COUNT\)/);
-  assert.match(source, /selectExtractableSearchArticles\(candidates\)/);
+  assert.match(searchSource, /display:\s*String\(SEARCH_CANDIDATE_COUNT\)/);
+  assert.match(searchSource, /selectArticles\(candidates\)/);
+  assert.match(apiSource, /searchExtractableNews\(query\)/);
 });

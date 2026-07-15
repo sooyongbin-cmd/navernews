@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -9,6 +10,7 @@ import {
   geminiTextDelta,
   hasRequiredSourceCitations,
   startGeminiBriefing,
+  startGeminiBriefingFromExtractedArticles,
 } from "../lib/gemini-briefing.mjs";
 import { INFOGRAPHIC_START_MARKER } from "../lib/gemini-infographic.mjs";
 
@@ -108,6 +110,43 @@ test("전문 추출이 실패하면 Gemini를 호출하지 않는다", async () 
   );
 
   assert.equal(interactionCalls, 0);
+});
+
+test("검색에서 확보한 전문을 재추출 없이 Gemini에 바로 전달한다", async () => {
+  const articles = [1, 2, 3].map((id) => ({
+    id: String(id),
+    title: `기사 ${id}`,
+    pubDate: "2026-07-15T00:00:00.000Z",
+    text: `검색에서 확보한 전문 ${id} UNIQUE_REUSED_${id}`,
+  }));
+  let calls = 0;
+  let prompt = "";
+  const expectedStream = (async function* () {})();
+
+  const result = await startGeminiBriefingFromExtractedArticles({
+    query: "자동 브리핑",
+    articles,
+    async createInteraction(input) {
+      calls += 1;
+      prompt = input.prompt;
+      return expectedStream;
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.stream, expectedStream);
+  for (const article of articles) {
+    assert.equal(prompt.split(article.text).length - 1, 1);
+  }
+
+  const routeSource = readFileSync(
+    new URL("../app/api/gemini-briefing/route.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(
+    routeSource,
+    /startGeminiBriefingFromExtractedArticles\([\s\S]*?articles:\s*search\.extractedArticles/
+  );
 });
 
 test("Gemini 스트림에서는 텍스트 델타만 추출한다", () => {
