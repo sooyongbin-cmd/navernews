@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildGeminiClientOptions,
   buildGeminiInteractionRequest,
   DEFAULT_GEMINI_MODEL,
   geminiStreamError,
@@ -9,6 +10,7 @@ import {
   hasRequiredSourceCitations,
   startGeminiBriefing,
 } from "../lib/gemini-briefing.mjs";
+import { INFOGRAPHIC_START_MARKER } from "../lib/gemini-infographic.mjs";
 
 test("Gemini 요청은 무료 모델과 비저장 스트리밍 설정으로 고정된다", () => {
   const request = buildGeminiInteractionRequest({
@@ -29,6 +31,14 @@ test("Gemini 요청은 무료 모델과 비저장 스트리밍 설정으로 고�
     },
   });
   assert.equal("tools" in request, false);
+});
+
+test("Gemini SDK는 Interactions 기본 API 버전을 사용한다", () => {
+  const options = buildGeminiClientOptions("test-api-key");
+
+  assert.deepEqual(options, { apiKey: "test-api-key" });
+  assert.equal("apiVersion" in options, false);
+  assert.equal("httpOptions" in options, false);
 });
 
 test("세 기사 전문을 모두 포함해 Gemini를 정확히 한 번 호출한다", async () => {
@@ -73,6 +83,8 @@ test("세 기사 전문을 모두 포함해 Gemini를 정확히 한 번 호출�
   for (const fullText of fullTexts) {
     assert.equal(receivedPrompt.split(fullText).length - 1, 1);
   }
+  assert.match(receivedPrompt, new RegExp(INFOGRAPHIC_START_MARKER));
+  assert.match(receivedPrompt, /추가 API 호출 없이 SVG 인포그래픽/);
 });
 
 test("전문 추출이 실패하면 Gemini를 호출하지 않는다", async () => {
@@ -122,6 +134,7 @@ test("Gemini 스트림 오류 이벤트를 예외로 변환한다", () => {
   });
 
   assert.equal(error.code, "RESOURCE_EXHAUSTED");
+  assert.equal(error.providerCode, "RESOURCE_EXHAUSTED");
   assert.match(error.message, /quota exceeded/);
 });
 

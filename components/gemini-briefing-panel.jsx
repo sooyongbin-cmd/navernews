@@ -1,6 +1,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
+import GeminiInfographic from "@/components/gemini-infographic";
 import {
   geminiFailureFromResponse,
   geminiNetworkFailure,
@@ -43,6 +44,7 @@ export default function GeminiBriefingPanel({
 }) {
   const [status, setStatus] = useState("idle");
   const [briefingText, setBriefingText] = useState("");
+  const [infographic, setInfographic] = useState(null);
   const [failure, setFailure] = useState(null);
   const [hasAttempted, setHasAttempted] = useState(false);
   const controllerRef = useRef(null);
@@ -64,6 +66,7 @@ export default function GeminiBriefingPanel({
     controllerRef.current = controller;
     setFailure(null);
     setBriefingText("");
+    setInfographic(null);
     setHasAttempted(true);
     setStatus("submitted");
 
@@ -98,10 +101,14 @@ export default function GeminiBriefingPanel({
         onDelta(text) {
           setBriefingText((current) => current + text);
         },
+        onInfographic(nextInfographic) {
+          setInfographic(nextInfographic);
+        },
       });
       setStatus("done");
     } catch (error) {
       setBriefingText("");
+      setInfographic(null);
       setFailure(
         error instanceof GeminiSseError
           ? geminiStreamFailure(error, metadata)
@@ -217,6 +224,12 @@ export default function GeminiBriefingPanel({
               <dt>오류 코드</dt>
               <dd>{failure.code}</dd>
             </div>
+            {failure.providerCode && failure.providerCode !== failure.code && (
+              <div>
+                <dt>제공사 코드</dt>
+                <dd>{failure.providerCode}</dd>
+              </div>
+            )}
             {failure.status && (
               <div>
                 <dt>HTTP 상태</dt>
@@ -269,6 +282,8 @@ export default function GeminiBriefingPanel({
           </MessageResponse>
         </article>
       )}
+
+      {infographic && <GeminiInfographic infographic={infographic} />}
 
       {(briefingText || hasAttempted) && (
         <div className="gemini-briefing-sources">

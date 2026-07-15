@@ -1090,6 +1090,86 @@ export default function Home() {
           padding-left: 1.25rem;
         }
 
+        .gemini-infographic {
+          margin: 0;
+          padding: 24px;
+          border-top: 1px solid #badbd6;
+          background: #f8fcfb;
+        }
+
+        .gemini-infographic-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 20px;
+          margin-bottom: 16px;
+        }
+
+        .gemini-infographic-heading span {
+          display: block;
+          margin-bottom: 4px;
+          color: #175c56;
+          font-family: var(--font-mono);
+          font-size: 0.68rem;
+          font-weight: 700;
+          letter-spacing: 0.12em;
+        }
+
+        .gemini-infographic-heading h3 {
+          margin: 0 0 4px;
+          font-family: var(--font-display);
+          font-size: 1.15rem;
+        }
+
+        .gemini-infographic-heading p {
+          margin: 0;
+          color: var(--ink-dim);
+          font-size: 0.8rem;
+        }
+
+        .gemini-infographic-heading button {
+          appearance: none;
+          flex: 0 0 auto;
+          padding: 9px 13px;
+          border: 1px solid #175c56;
+          background: #fff;
+          color: #175c56;
+          cursor: pointer;
+          font-family: var(--font-body);
+          font-size: 0.8rem;
+          font-weight: 700;
+        }
+
+        .gemini-infographic-heading button:hover {
+          background: #175c56;
+          color: #fff;
+        }
+
+        .gemini-infographic-heading button:focus-visible {
+          outline: 3px solid #67c6bb;
+          outline-offset: 3px;
+        }
+
+        .gemini-infographic-canvas {
+          overflow: hidden;
+          border: 1px solid #91c7bf;
+          background: #edf8f5;
+          box-shadow: 4px 4px 0 #d4ece7;
+        }
+
+        .gemini-infographic-canvas svg {
+          display: block;
+          width: 100%;
+          height: auto;
+        }
+
+        .gemini-infographic figcaption {
+          margin-top: 12px;
+          color: var(--ink-dim);
+          font-size: 0.74rem;
+          line-height: 1.5;
+        }
+
         .gemini-briefing-sources {
           border-top: 1px solid #badbd6;
           background: #f8fcfb;
@@ -1166,6 +1246,10 @@ export default function Home() {
           .gemini-briefing-button {
             width: 100%;
           }
+
+          .gemini-infographic-heading {
+            flex-direction: column;
+          }
         }
 
         @media (max-width: 480px) {
@@ -1214,6 +1298,10 @@ export default function Home() {
           .gemini-briefing-sources {
             padding-left: 17px;
             padding-right: 17px;
+          }
+
+          .gemini-infographic {
+            padding: 17px;
           }
 
           .gemini-briefing-error {

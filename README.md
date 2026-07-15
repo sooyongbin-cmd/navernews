@@ -13,6 +13,8 @@
 
 기존 패널은 Vercel AI Gateway의 `openai/gpt-5-mini`를 사용합니다. 그 아래의 Gemini 패널은 AI Gateway를 거치지 않고 공식 Google SDK로 `gemini-3.5-flash` Interactions API를 직접 호출합니다.
 
+Gemini 브리핑은 같은 모델 응답 끝에 제목·키워드·공통 사실·관점 차이·확인할 점을 제한된 JSON으로 함께 생성합니다. 서버가 필드 길이와 `[1]`~`[3]` 출처를 검증한 뒤 브라우저가 고정된 React SVG 템플릿으로 렌더링합니다. 이미지 생성 모델이나 추가 API 호출은 사용하지 않으며 완성된 SVG는 브라우저에서 저장할 수 있습니다.
+
 기사 전문은 요청 메모리에서만 처리하며 토큰, 데이터베이스, 서버 로그 또는 브라우저 응답에 저장하지 않습니다.
 
 ## 로컬 실행
@@ -92,4 +94,4 @@ npm test
 npm run build
 ```
 
-테스트는 토큰 변조·만료, 전문 미포함, SSRF 주소 차단, Readability 추출, 3건 전체 성공 조건, 프롬프트 인젝션 방어 지침, Gateway·Gemini 무료 한도 오류 메시지, Gemini SSE 처리와 검색 결과 3건 제한을 확인합니다.
+테스트는 토큰 변조·만료, 전문 미포함, SSRF 주소 차단, Readability 추출, 3건 전체 성공 조건, 프롬프트 인젝션 방어 지침, Gateway·Gemini 무료 한도 오류 메시지, Gemini SSE 및 SVG 인포그래픽 데이터 검증과 검색 결과 3건 제한을 확인합니다.

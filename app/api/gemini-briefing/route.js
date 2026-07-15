@@ -6,6 +6,7 @@ import {
   ArticleBatchError,
 } from "@/lib/article-extractor.mjs";
 import {
+  buildGeminiClientOptions,
   buildGeminiInteractionRequest,
   DEFAULT_GEMINI_MODEL,
   GEMINI_MODEL_TIMEOUT_MS,
@@ -19,6 +20,10 @@ import {
   geminiErrorStatus,
   publicGeminiErrorMessage,
 } from "@/lib/gemini-errors.mjs";
+import {
+  createGeminiInfographicSplitter,
+  parseGeminiInfographicBlock,
+} from "@/lib/gemini-infographic.mjs";
 import { BriefingTokenError } from "@/lib/briefing-token.mjs";
 
 export const runtime = "nodejs";
@@ -76,10 +81,7 @@ function getGeminiClient() {
   }
 
   if (!geminiClient) {
-    geminiClient = new GoogleGenAI({
-      apiKey,
-      apiVersion: "v1",
-    });
+    geminiClient = new GoogleGenAI(buildGeminiClientOptions(apiKey));
   }
 
   return geminiClient;
@@ -94,7 +96,8 @@ function streamGeminiResponse(stream, requestId) {
 
   const body = new ReadableStream({
     async start(controller) {
-      let generatedText = "";
+      let briefingText = "";
+      const splitter = createGeminiInfographicSplitter();
 
       try {
         for await (const event of stream) {
@@ -104,17 +107,32 @@ function streamGeminiResponse(stream, requestId) {
           const text = geminiTextDelta(event);
           if (!text) continue;
 
-          generatedText += text;
-          controller.enqueue(encoder.encode(sseEvent("delta", { text })));
+          const briefingDelta = splitter.push(text);
+          if (!briefingDelta) continue;
+
+          briefingText += briefingDelta;
+          controller.enqueue(
+            encoder.encode(sseEvent("delta", { text: briefingDelta }))
+          );
         }
 
-        if (!generatedText.trim()) {
+        const completedOutput = splitter.finish();
+        if (completedOutput.briefingText) {
+          briefingText += completedOutput.briefingText;
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("delta", { text: completedOutput.briefingText })
+            )
+          );
+        }
+
+        if (!briefingText.trim()) {
           const error = new Error("Gemini returned an empty response.");
           error.code = "GEMINI_EMPTY_RESPONSE";
           throw error;
         }
 
-        if (!hasRequiredSourceCitations(generatedText)) {
+        if (!hasRequiredSourceCitations(briefingText)) {
           controller.enqueue(
             encoder.encode(
               sseEvent("error", {
@@ -128,6 +146,35 @@ function streamGeminiResponse(stream, requestId) {
           );
           return;
         }
+
+        let infographic;
+        try {
+          infographic = parseGeminiInfographicBlock(
+            completedOutput.infographicBlock
+          );
+        } catch (error) {
+          console.error("[gemini-briefing] infographic validation failed", {
+            requestId,
+            code: "GEMINI_INFOGRAPHIC_VALIDATION_FAILED",
+            name: error?.name || "UnknownError",
+          });
+          controller.enqueue(
+            encoder.encode(
+              sseEvent("error", {
+                code: "GEMINI_INFOGRAPHIC_VALIDATION_FAILED",
+                message:
+                  "Gemini가 SVG 인포그래픽에 필요한 형식을 지키지 않아 결과를 표시하지 않았습니다. 다시 시도해 주세요.",
+                status: 502,
+                requestId,
+              })
+            )
+          );
+          return;
+        }
+
+        controller.enqueue(
+          encoder.encode(sseEvent("infographic", { infographic }))
+        );
 
         controller.enqueue(
           encoder.encode(sseEvent("complete", { requestId }))
@@ -146,13 +193,20 @@ function streamGeminiResponse(stream, requestId) {
         console.error("[gemini-briefing] AI stream failed", {
           requestId,
           code,
+          providerCode: error?.providerCode || error?.code || null,
           name: error?.name || "UnknownError",
           status,
         });
 
         controller.enqueue(
           encoder.encode(
-            sseEvent("error", { code, message, status, requestId })
+            sseEvent("error", {
+              code,
+              message,
+              status,
+              requestId,
+              providerCode: error?.providerCode || error?.code || null,
+            })
           )
         );
       } finally {
