@@ -4,6 +4,12 @@ import dynamic from "next/dynamic";
 import Head from "next/head";
 import { useMemo, useState } from "react";
 
+import {
+  briefingFailureFromResponse,
+  briefingNetworkFailure,
+  briefingStreamFailure,
+} from "@/lib/briefing-client-error.mjs";
+
 const MessageResponse = dynamic(
   () =>
     import("@/components/ai-elements/message").then(
@@ -46,7 +52,8 @@ function latestAssistantText(messages) {
 
 function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
   const [failure, setFailure] = useState(null);
-  const [streamError, setStreamError] = useState("");
+  const [streamFailure, setStreamFailure] = useState(null);
+  const [responseMeta, setResponseMeta] = useState({});
   const [hasAttempted, setHasAttempted] = useState(false);
 
   const transport = useMemo(
@@ -57,18 +64,31 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
           body: { briefingToken },
         }),
         fetch: async (input, init) => {
-          const response = await fetch(input, init);
-          if (!response.ok) {
-            const data = await response
-              .clone()
-              .json()
-              .catch(() => ({
-                code: "BRIEFING_REQUEST_FAILED",
-                message: "브리핑 요청에 실패했습니다.",
-              }));
-            setFailure(data);
+          try {
+            const response = await fetch(input, init);
+            const metadata = {
+              status: response.status,
+              statusText: response.statusText || null,
+              requestId:
+                response.headers.get("x-briefing-request-id") ||
+                response.headers.get("x-vercel-id") ||
+                response.headers.get("x-request-id") ||
+                null,
+              responseType:
+                response.headers.get("content-type")?.split(";", 1)[0] ||
+                null,
+            };
+            setResponseMeta(metadata);
+
+            if (!response.ok) {
+              setFailure(await briefingFailureFromResponse(response));
+            }
+
+            return response;
+          } catch (fetchError) {
+            setFailure(briefingNetworkFailure(fetchError));
+            throw fetchError;
           }
-          return response;
         },
       }),
     [briefingToken]
@@ -77,9 +97,7 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
   const { messages, sendMessage, setMessages, status, error } = useChat({
     transport,
     onError(chatError) {
-      setStreamError(
-        chatError?.message || "AI 브리핑 생성 중 오류가 발생했습니다."
-      );
+      setStreamFailure(briefingStreamFailure(chatError, responseMeta));
     },
   });
 
@@ -90,7 +108,8 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
     if (!briefingToken || isBusy) return;
 
     setFailure(null);
-    setStreamError("");
+    setStreamFailure(null);
+    setResponseMeta({});
     setMessages([]);
     setHasAttempted(true);
 
@@ -103,7 +122,10 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
     }
   }
 
-  const displayedError = failure?.message || streamError || error?.message;
+  const displayedFailure =
+    failure ||
+    streamFailure ||
+    (error ? briefingStreamFailure(error, responseMeta) : null);
 
   return (
     <section className="briefing-panel" aria-labelledby="briefing-title">
@@ -153,10 +175,40 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
         </div>
       )}
 
-      {displayedError && !briefingText && (
+      {displayedFailure && !briefingText && (
         <div className="briefing-error" role="alert">
           <strong>브리핑을 만들지 못했습니다.</strong>
-          <p>{displayedError}</p>
+          <p>{displayedFailure.message}</p>
+          <dl className="briefing-error-meta">
+            <div>
+              <dt>오류 코드</dt>
+              <dd>{displayedFailure.code}</dd>
+            </div>
+            {displayedFailure.status && (
+              <div>
+                <dt>HTTP 상태</dt>
+                <dd>
+                  {displayedFailure.status}
+                  {displayedFailure.statusText
+                    ? ` ${displayedFailure.statusText}`
+                    : ""}
+                </dd>
+              </div>
+            )}
+            {displayedFailure.requestId && (
+              <div>
+                <dt>요청 ID</dt>
+                <dd>{displayedFailure.requestId}</dd>
+              </div>
+            )}
+            {displayedFailure.responseType &&
+              displayedFailure.responseType !== "application/json" && (
+                <div>
+                  <dt>응답 형식</dt>
+                  <dd>{displayedFailure.responseType}</dd>
+                </div>
+              )}
+          </dl>
           {Array.isArray(failure?.articles) && (
             <ul>
               {failure.articles.map((article) => {
@@ -354,7 +406,7 @@ export default function Home() {
         </footer>
       </div>
 
-      <style jsx>{`
+      <style jsx global>{`
         .page {
           max-width: 800px;
           margin: 0 auto;
@@ -574,9 +626,37 @@ export default function Home() {
         }
 
         .briefing-button {
+          appearance: none;
           flex: 0 0 auto;
           min-width: 174px;
-          padding: 12px 16px;
+          min-height: 48px;
+          padding: 12px 18px;
+          border: 2px solid var(--ink);
+          border-radius: 2px;
+          box-shadow: 3px 3px 0 var(--ink);
+          font-size: 0.92rem;
+          line-height: 1.2;
+          letter-spacing: 0.01em;
+          transform: translate(0, 0);
+          transition:
+            background 0.15s ease,
+            box-shadow 0.15s ease,
+            transform 0.15s ease;
+        }
+
+        .briefing-button:hover:not(:disabled) {
+          box-shadow: 4px 4px 0 var(--ink);
+          transform: translate(-1px, -1px);
+        }
+
+        .briefing-button:active:not(:disabled) {
+          box-shadow: 1px 1px 0 var(--ink);
+          transform: translate(2px, 2px);
+        }
+
+        .briefing-button:disabled {
+          border-color: var(--ink-dim);
+          box-shadow: 2px 2px 0 var(--ink-dim);
         }
 
         .briefing-notice,
@@ -606,6 +686,16 @@ export default function Home() {
         .briefing-error {
           color: var(--wire-red);
           background: #fff7f5;
+          border: 2px solid var(--wire-red);
+          box-shadow: 3px 3px 0 color-mix(in srgb, var(--wire-red) 28%, transparent);
+          margin: 20px 24px;
+          padding: 18px 20px;
+        }
+
+        .briefing-error > strong {
+          display: block;
+          font-family: var(--font-display);
+          font-size: 1.08rem;
         }
 
         .briefing-error p {
@@ -620,6 +710,34 @@ export default function Home() {
 
         .briefing-error li + li {
           margin-top: 8px;
+        }
+
+        .briefing-error-meta {
+          display: grid;
+          gap: 7px;
+          margin: 16px 0 0;
+          padding-top: 14px;
+          border-top: 1px solid color-mix(in srgb, var(--wire-red) 35%, white);
+          color: var(--ink-dim);
+          font-size: 0.78rem;
+        }
+
+        .briefing-error-meta div {
+          display: grid;
+          grid-template-columns: 82px minmax(0, 1fr);
+          gap: 10px;
+        }
+
+        .briefing-error-meta dt {
+          font-weight: 700;
+          color: var(--wire-red);
+        }
+
+        .briefing-error-meta dd {
+          min-width: 0;
+          margin: 0;
+          font-family: var(--font-mono);
+          overflow-wrap: anywhere;
         }
 
         .briefing-error .ready {
@@ -638,7 +756,7 @@ export default function Home() {
           overflow-wrap: anywhere;
         }
 
-        .briefing-output :global(h2) {
+        .briefing-output h2 {
           font-family: var(--font-display);
           font-size: 1.3rem;
           margin-top: 1.8rem;
@@ -646,7 +764,7 @@ export default function Home() {
           border-bottom: 1px solid var(--rule);
         }
 
-        .briefing-output :global(h2:first-child) {
+        .briefing-output h2:first-child {
           margin-top: 0;
         }
 
@@ -751,11 +869,15 @@ export default function Home() {
           .briefing-heading,
           .briefing-notice,
           .briefing-progress,
-          .briefing-error,
           .briefing-output,
           .briefing-sources {
             padding-left: 17px;
             padding-right: 17px;
+          }
+
+          .briefing-error {
+            margin: 16px;
+            padding: 16px;
           }
         }
       `}</style>
