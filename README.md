@@ -1,78 +1,81 @@
-# 뉴스와이어 — 네이버 뉴스 검색 웹앱
+# 뉴스와이어 — 네이버 뉴스 검색과 AI 브리핑
 
-키워드를 입력하면 네이버 뉴스 검색 오픈API에서 **최신순 10건**을 가져와 보여주고,
-각 뉴스 제목을 클릭하면 원문 기사로 이동합니다. Next.js(Pages Router) 기반으로
-Vercel에 바로 배포할 수 있습니다.
+검색어로 네이버 뉴스 최신 결과 3건을 조회하고, 세 언론사 원문의 읽기 본문을 모두 확보했을 때만 Vercel AI Gateway로 종합 브리핑을 생성하는 Next.js 앱입니다.
 
-## 1. 네이버 개발자센터 설정 (필수)
+## 주요 동작
 
-이 앱은 네이버의 **검색 오픈API(뉴스)**를 사용합니다. 아래 절차를 그대로 따라 하시면 됩니다.
+1. `/api/search`가 네이버 뉴스 검색 API를 `display=3`, `sort=date`로 호출합니다.
+2. 검색된 세 원문 URL을 5분짜리 HMAC 서명 토큰으로 묶습니다.
+3. 사용자가 **AI 검색 브리핑 생성** 버튼을 눌러야 `/api/briefing`이 실행됩니다.
+4. 서버가 `robots.txt`를 확인하고 세 원문을 병렬로 가져옵니다.
+5. `Mozilla Readability`로 세 기사 전문이 모두 추출된 경우에만 `openai/gpt-5-mini`를 한 번 호출합니다.
+6. 하나라도 유료벽, 로그인, 차단, 시간 초과, 짧은 본문이면 AI를 호출하지 않고 기사별 실패 사유를 표시합니다.
 
-1. https://developers.naver.com 접속 후 네이버 아이디로 로그인
-2. 상단 메뉴 **Application → 애플리케이션 등록** 클릭
-3. 등록 정보 입력
-   - **애플리케이션 이름**: 원하는 이름 (예: `naver-news-search`)
-   - **사용 API**: **검색** 선택 후 추가 (뉴스 검색이 "검색" API에 포함되어 있습니다)
-   - **비로그인 오픈 API 서비스 환경**: **WEB 설정** 선택
-   - **웹 서비스 URL**: 로컬 개발 시 `http://localhost:3000`, 배포 후에는 Vercel에서 발급받은 실제 도메인
-     (예: `https://your-app.vercel.app`)을 반드시 추가해야 합니다. 여러 개 등록 가능하며,
-     나중에 도메인이 확정되면 다시 등록/수정할 수 있습니다.
-4. 등록 완료 후 발급되는 **Client ID**와 **Client Secret**을 확인 (Application 목록에서 언제든 재확인 가능)
+기사 전문은 요청 메모리에서만 처리하며 토큰, 데이터베이스, 서버 로그 또는 브라우저 응답에 저장하지 않습니다.
 
-### 주의사항
-- 뉴스 검색 API는 **비로그인 방식**이며 트래픽 제한이 있습니다(일반적으로 일일 25,000건 수준이며 네이버 정책에 따라 변경될 수 있으니 개발자센터에서 본인 앱의 한도를 확인하세요).
-- Client ID/Secret은 절대 프론트엔드(브라우저) 코드에 노출하면 안 됩니다. 이 프로젝트는
-  `pages/api/search.js`라는 **서버 사이드 API Route**에서만 호출하도록 구성되어 있어 안전합니다.
-- 네이버 뉴스 검색 API는 CORS를 허용하지 않으므로, 브라우저에서 직접 호출하면 실패합니다.
-  반드시 서버(백엔드/API Route)를 경유해야 합니다 — 이미 이 프로젝트에 구현되어 있습니다.
-- API 응답의 `link`는 네이버 뉴스 페이지로 갈 수도 있어, 이 앱은 가능하면 언론사 원문 링크인
-  `originallink`를 우선 사용하도록 처리했습니다.
+## 로컬 실행
 
-## 2. 로컬 실행 방법
+Node.js 20 이상을 권장합니다.
 
 ```bash
 npm install
 cp .env.local.example .env.local
-# .env.local 파일을 열어 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 값 입력
 npm run dev
 ```
 
-브라우저에서 http://localhost:3000 접속 후 키워드를 검색해 보세요.
+Windows PowerShell에서는 다음 명령으로 환경 파일을 복사할 수 있습니다.
 
-## 3. Vercel 배포 방법
-
-1. 이 프로젝트를 GitHub 저장소에 push
-2. https://vercel.com 에서 **New Project → GitHub 저장소 선택 → Import**
-3. **Environment Variables** 항목에 아래 두 값을 추가
-   - `NAVER_CLIENT_ID`
-   - `NAVER_CLIENT_SECRET`
-4. **Deploy** 클릭
-5. 배포 완료 후 발급된 도메인(예: `https://your-app.vercel.app`)을
-   네이버 개발자센터 애플리케이션 설정의 **웹 서비스 URL**에 추가로 등록
-   (등록해야 정상적으로 API 요청이 허용됩니다)
-
-## 4. 프로젝트 구조
-
-```
-naver-news-app/
-├── pages/
-│   ├── _app.js          # 전역 폰트/스타일 적용
-│   ├── index.js          # 검색 UI 및 결과 렌더링
-│   └── api/
-│       └── search.js     # 네이버 뉴스 검색 API를 호출하는 서버 라우트
-├── styles/
-│   └── globals.css
-├── .env.local.example    # 환경변수 예시 (실값은 .env.local에 입력, git에 커밋 금지)
-├── jsconfig.json
-├── next.config.js
-└── package.json
+```powershell
+Copy-Item .env.local.example .env.local
 ```
 
-## 5. 동작 방식 요약
+`.env.local`에 다음 값을 설정합니다.
 
-1. 사용자가 키워드 입력 후 검색 클릭
-2. 프론트엔드가 `/api/search?query=키워드` 호출
-3. 서버(API Route)가 `X-Naver-Client-Id`, `X-Naver-Client-Secret` 헤더를 담아
-   `https://openapi.naver.com/v1/search/news.json?query=...&display=10&sort=date` 호출
-4. 응답에서 HTML 태그(`<b>` 등)와 엔티티(`&quot;` 등)를 제거해 깔끔한 제목/요약으로 가공
-5. 프론트엔드에서 발행 시각 최신순으로 10건을 카드 형태로 렌더링, 제목 클릭 시 새 탭에서 원문으로 이동
+- `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`: [네이버 개발자센터](https://developers.naver.com/apps)에서 발급
+- `BRIEFING_SIGNING_SECRET`: 32자 이상의 무작위 비밀값
+- `AI_MODEL`: `openai/gpt-5-mini` 고정
+- `AI_GATEWAY_API_KEY`: 로컬 AI Gateway 인증 키
+
+서명 비밀값은 다음처럼 생성할 수 있습니다.
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Vercel 프로젝트에 연결했다면 API 키 대신 OIDC를 사용할 수 있습니다.
+
+```bash
+vercel link
+vercel env pull .env.local
+```
+
+## Vercel 배포
+
+Vercel 프로젝트의 환경 변수에 아래 값을 등록합니다.
+
+- `NAVER_CLIENT_ID`
+- `NAVER_CLIENT_SECRET`
+- `BRIEFING_SIGNING_SECRET`
+- `AI_MODEL=openai/gpt-5-mini`
+
+AI Gateway를 프로젝트에서 활성화하면 배포 환경에서는 OIDC 토큰이 자동으로 갱신됩니다. 무료 운영을 위해 애플리케이션은 `openai/gpt-5-mini` 이외의 모델을 거부하며 모델 폴백과 BYOK를 설정하지 않습니다. AI Gateway 무료 크레딧 또는 호출 한도가 소진되면 브리핑 생성을 중단합니다.
+
+## 기사 전문 추출 제한
+
+- HTTP/HTTPS의 80·443 포트만 접근합니다.
+- 사설·루프백·링크 로컬·예약 IP와 해당 주소로 향하는 리다이렉트를 차단합니다.
+- 기사당 8초, 3회 리다이렉트, HTML 2MB를 한도로 둡니다.
+- 본문은 최소 500자·3문단, 최대 50,000자이며 세 기사 합계는 120,000자 이하여야 합니다.
+- 유료벽, 로그인, JavaScript 실행, 쿠키 또는 봇 차단을 우회하지 않습니다.
+- `robots.txt`를 읽을 수 없거나 수집을 금지하면 해당 기사는 실패 처리합니다.
+
+따라서 임의의 언론사 기사 3건을 항상 요약할 수는 없습니다. 공개·상업 서비스로 확대할 경우 언론사 이용약관, 저작권 및 전문 이용 권한을 별도로 검토해야 합니다.
+
+## 검증
+
+```bash
+npm test
+npm run build
+```
+
+테스트는 토큰 변조·만료, 전문 미포함, SSRF 주소 차단, Readability 추출, 3건 전체 성공 조건, 프롬프트 인젝션 방어 지침, 무료 한도 오류 메시지와 검색 결과 3건 제한을 확인합니다.

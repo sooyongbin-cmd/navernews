@@ -1,73 +1,128 @@
-// 네이버 뉴스 검색 오픈API를 서버(백엔드)에서 호출하는 API Route
-// - Client ID/Secret은 브라우저에 노출되면 안 되므로 반드시 서버 사이드에서만 호출합니다.
-// - 네이버 API는 CORS를 허용하지 않기 때문에 프론트에서 직접 호출하면 실패합니다.
+import { createBriefingToken } from "@/lib/briefing-token.mjs";
 
 function stripHtml(text = "") {
-  return text
-    .replace(/<[^>]*>/g, "") // <b> 등 HTML 태그 제거
+  return String(text)
+    .replace(/<[^>]*>/g, "")
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, value) => String.fromCodePoint(Number(value)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, value) =>
+      String.fromCodePoint(Number.parseInt(value, 16))
+    );
+}
+
+function isHttpUrl(value) {
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
 }
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
   if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
     return res.status(405).json({ message: "GET 요청만 지원합니다." });
   }
 
-  const { query } = req.query;
+  const query = String(req.query.query ?? "").trim();
+  if (!query) {
+    return res.status(400).json({ message: "검색어를 입력해 주세요." });
+  }
 
-  if (!query || !query.trim()) {
-    return res.status(400).json({ message: "검색어(query)를 입력해주세요." });
+  if (query.length > 100) {
+    return res
+      .status(400)
+      .json({ message: "검색어는 100자 이내로 입력해 주세요." });
   }
 
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
-
   if (!clientId || !clientSecret) {
     return res.status(500).json({
       message:
-        "서버에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수가 설정되어 있지 않습니다.",
+        "NAVER_CLIENT_ID와 NAVER_CLIENT_SECRET 환경 변수를 설정해 주세요.",
     });
   }
 
-  const apiUrl = `https://openapi.naver.com/v1/search/news.json?query=${encodeURIComponent(
-    query
-  )}&display=10&start=1&sort=date`; // sort=date: 최신순 정렬
+  const apiUrl = new URL("https://openapi.naver.com/v1/search/news.json");
+  apiUrl.search = new URLSearchParams({
+    query,
+    display: "3",
+    start: "1",
+    sort: "date",
+  }).toString();
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), 8_000);
 
   try {
-    const naverRes = await fetch(apiUrl, {
+    const naverResponse = await fetch(apiUrl, {
       headers: {
         "X-Naver-Client-Id": clientId,
         "X-Naver-Client-Secret": clientSecret,
       },
+      signal: abortController.signal,
     });
 
-    if (!naverRes.ok) {
-      const errorText = await naverRes.text();
-      return res.status(naverRes.status).json({
-        message: "네이버 뉴스 API 호출에 실패했습니다.",
-        detail: errorText,
+    if (!naverResponse.ok) {
+      return res.status(naverResponse.status).json({
+        message: "네이버 뉴스 검색에 실패했습니다. 잠시 후 다시 시도해 주세요.",
       });
     }
 
-    const data = await naverRes.json();
+    const data = await naverResponse.json();
+    const items = (data.items || []).slice(0, 3).map((item, index) => {
+      const originalLink = String(item.originallink ?? "").trim();
+      const naverLink = String(item.link ?? "").trim();
 
-    const items = (data.items || []).map((item) => ({
-      title: stripHtml(item.title),
-      description: stripHtml(item.description),
-      link: item.originallink && item.originallink.trim() ? item.originallink : item.link,
-      naverLink: item.link,
-      pubDate: item.pubDate,
-    }));
-
-    return res.status(200).json({ items });
-  } catch (error) {
-    return res.status(500).json({
-      message: "서버 오류가 발생했습니다.",
-      detail: String(error),
+      return {
+        id: String(index + 1),
+        title: stripHtml(item.title),
+        description: stripHtml(item.description),
+        originalLink: isHttpUrl(originalLink) ? originalLink : "",
+        naverLink: isHttpUrl(naverLink) ? naverLink : "",
+        pubDate: item.pubDate,
+      };
     });
+
+    let briefingToken = null;
+    let expiresAt = null;
+    const canCreateBriefing =
+      items.length === 3 && items.every((item) => item.originalLink);
+
+    if (canCreateBriefing) {
+      const signed = createBriefingToken({ query, articles: items });
+      briefingToken = signed.token;
+      expiresAt = signed.expiresAt;
+    }
+
+    return res.status(200).json({
+      query,
+      items,
+      briefingToken,
+      expiresAt,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return res.status(504).json({
+        message: "네이버 뉴스 검색 응답 시간이 초과되었습니다.",
+      });
+    }
+
+    if (error?.status === 500) {
+      return res.status(500).json({ message: error.message });
+    }
+
+    return res.status(500).json({
+      message: "뉴스 검색 중 서버 오류가 발생했습니다.",
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 }

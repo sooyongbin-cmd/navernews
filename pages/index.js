@@ -1,32 +1,220 @@
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import dynamic from "next/dynamic";
 import Head from "next/head";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+
+const MessageResponse = dynamic(
+  () =>
+    import("@/components/ai-elements/message").then(
+      (module) => module.MessageResponse
+    ),
+  {
+    ssr: false,
+    loading: () => <p>브리핑 화면을 준비하고 있습니다…</p>,
+  }
+);
 
 function formatPubDate(pubDate) {
-  try {
-    const d = new Date(pubDate);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(
-      d.getHours()
-    )}:${pad(d.getMinutes())}`;
-  } catch {
-    return pubDate;
-  }
+  const date = new Date(pubDate);
+  if (Number.isNaN(date.getTime())) return pubDate;
+
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}.${pad(date.getDate())} ${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
 }
 
 function sourceOf(link) {
   try {
     return new URL(link).hostname.replace(/^www\./, "");
   } catch {
-    return "";
+    return "출처 미상";
   }
+}
+
+function latestAssistantText(messages) {
+  const assistant = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+
+  return (assistant?.parts || [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
+  const [failure, setFailure] = useState(null);
+  const [streamError, setStreamError] = useState("");
+  const [hasAttempted, setHasAttempted] = useState(false);
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/briefing",
+        prepareSendMessagesRequest: () => ({
+          body: { briefingToken },
+        }),
+        fetch: async (input, init) => {
+          const response = await fetch(input, init);
+          if (!response.ok) {
+            const data = await response
+              .clone()
+              .json()
+              .catch(() => ({
+                code: "BRIEFING_REQUEST_FAILED",
+                message: "브리핑 요청에 실패했습니다.",
+              }));
+            setFailure(data);
+          }
+          return response;
+        },
+      }),
+    [briefingToken]
+  );
+
+  const { messages, sendMessage, setMessages, status, error } = useChat({
+    transport,
+    onError(chatError) {
+      setStreamError(
+        chatError?.message || "AI 브리핑 생성 중 오류가 발생했습니다."
+      );
+    },
+  });
+
+  const briefingText = latestAssistantText(messages);
+  const isBusy = status === "submitted" || status === "streaming";
+
+  async function requestBriefing() {
+    if (!briefingToken || isBusy) return;
+
+    setFailure(null);
+    setStreamError("");
+    setMessages([]);
+    setHasAttempted(true);
+
+    try {
+      await sendMessage({
+        text: `검색어 '${searchedFor}'의 기사 3건을 종합해 주세요.`,
+      });
+    } catch {
+      // useChat의 onError와 커스텀 transport가 사용자용 오류를 설정합니다.
+    }
+  }
+
+  const displayedError = failure?.message || streamError || error?.message;
+
+  return (
+    <section className="briefing-panel" aria-labelledby="briefing-title">
+      <div className="briefing-heading">
+        <div>
+          <span className="eyebrow">AI SEARCH BRIEFING</span>
+          <h2 id="briefing-title">기사 3건 전문 종합</h2>
+          <p>
+            세 원문이 모두 확보된 경우에만 AI가 한 번에 비교·요약합니다.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="briefing-button"
+          onClick={requestBriefing}
+          disabled={!briefingToken || isBusy}
+        >
+          {status === "submitted"
+            ? "전문 확인 중…"
+            : status === "streaming"
+              ? "AI 종합 중…"
+              : briefingText
+                ? "브리핑 다시 생성"
+                : "AI 검색 브리핑 생성"}
+        </button>
+      </div>
+
+      {!briefingToken && (
+        <p className="briefing-notice" role="status">
+          원문 링크가 있는 기사 3건이 모두 검색되어야 브리핑을 만들 수 있습니다.
+        </p>
+      )}
+
+      {briefingToken && !hasAttempted && (
+        <p className="briefing-notice" role="status">
+          브리핑 요청은 검색 후 5분 동안 유효합니다
+          {expiresAt ? ` · 만료 ${new Date(expiresAt).toLocaleTimeString("ko-KR")}` : ""}.
+        </p>
+      )}
+
+      {isBusy && (
+        <div className="briefing-progress" role="status" aria-live="polite">
+          <span className="progress-dot" />
+          {status === "submitted"
+            ? "언론사 정책과 세 기사 전문을 확인하고 있습니다."
+            : "세 기사 전체를 비교해 종합 브리핑을 작성하고 있습니다."}
+        </div>
+      )}
+
+      {displayedError && !briefingText && (
+        <div className="briefing-error" role="alert">
+          <strong>브리핑을 만들지 못했습니다.</strong>
+          <p>{displayedError}</p>
+          {Array.isArray(failure?.articles) && (
+            <ul>
+              {failure.articles.map((article) => {
+                const item = items.find((candidate) => candidate.id === article.id);
+                return (
+                  <li key={article.id}>
+                    <span className={article.status === "ready" ? "ready" : "failed"}>
+                      [{article.id}] {article.status === "ready" ? "전문 확보" : "확보 실패"}
+                    </span>
+                    {item?.title ? ` ${item.title}` : ""}
+                    {article.reason ? ` — ${article.reason}` : ""}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {briefingText && (
+        <article className="briefing-output" aria-live="polite">
+          <MessageResponse isAnimating={status === "streaming"}>
+            {briefingText}
+          </MessageResponse>
+        </article>
+      )}
+
+      {(briefingText || hasAttempted) && (
+        <div className="briefing-sources">
+          <h3>검토한 원문</h3>
+          <ol>
+            {items.map((item) => (
+              <li key={item.id}>
+                <span>[{item.id}]</span>
+                <a
+                  href={item.originalLink || item.naverLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {item.title}
+                </a>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export default function Home() {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("idle"); // idle | loading | done | error
-  const [errorMsg, setErrorMsg] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [errorMessage, setErrorMessage] = useState("");
   const [searchedFor, setSearchedFor] = useState("");
+  const [briefingToken, setBriefingToken] = useState(null);
+  const [expiresAt, setExpiresAt] = useState(null);
 
   const todayLabel = new Date().toLocaleDateString("ko-KR", {
     year: "numeric",
@@ -35,40 +223,47 @@ export default function Home() {
     weekday: "long",
   });
 
-  async function handleSearch(e) {
-    e.preventDefault();
-    const q = query.trim();
-    if (!q) return;
+  async function handleSearch(event) {
+    event.preventDefault();
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) return;
 
     setStatus("loading");
-    setErrorMsg("");
+    setErrorMessage("");
+    setItems([]);
+    setBriefingToken(null);
+    setExpiresAt(null);
 
     try {
-      const res = await fetch(`/api/search?query=${encodeURIComponent(q)}`);
-      const data = await res.json();
+      const response = await fetch(
+        `/api/search?query=${encodeURIComponent(normalizedQuery)}`
+      );
+      const data = await response.json();
 
-      if (!res.ok) {
+      if (!response.ok) {
         setStatus("error");
-        setErrorMsg(data.message || "검색 중 오류가 발생했습니다.");
+        setErrorMessage(data.message || "뉴스 검색 중 오류가 발생했습니다.");
         return;
       }
 
       setItems(data.items || []);
-      setSearchedFor(q);
+      setSearchedFor(data.query || normalizedQuery);
+      setBriefingToken(data.briefingToken || null);
+      setExpiresAt(data.expiresAt || null);
       setStatus("done");
-    } catch (err) {
+    } catch {
       setStatus("error");
-      setErrorMsg("네트워크 오류로 검색하지 못했습니다. 다시 시도해 주세요.");
+      setErrorMessage("네트워크 오류로 검색하지 못했습니다. 다시 시도해 주세요.");
     }
   }
 
   return (
     <>
       <Head>
-        <title>뉴스와이어 — 네이버 뉴스 검색</title>
+        <title>뉴스와이어 — 네이버 뉴스 검색과 AI 브리핑</title>
         <meta
           name="description"
-          content="키워드로 네이버 뉴스 최신순 검색 결과 10건을 확인하세요."
+          content="네이버 최신 뉴스 3건을 검색하고 기사 전문을 바탕으로 AI 종합 브리핑을 생성합니다."
         />
       </Head>
 
@@ -76,8 +271,8 @@ export default function Home() {
         <header className="masthead">
           <div className="masthead-rule" />
           <h1>뉴스와이어</h1>
-          <p className="dateline">
-            {todayLabel} · 네이버 뉴스 검색 결과 최신순 10건
+          <p className="dateline" suppressHydrationWarning>
+            {todayLabel} · 네이버 뉴스 최신 검색 결과 3건
           </p>
           <div className="masthead-rule" />
         </header>
@@ -86,68 +281,82 @@ export default function Home() {
           <label htmlFor="query">QUERY</label>
           <input
             id="query"
-            type="text"
-            placeholder="검색할 키워드를 입력하세요 (예: 인공지능)"
+            type="search"
+            maxLength={100}
+            placeholder="검색할 키워드를 입력하세요"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(event) => setQuery(event.target.value)}
           />
           <button type="submit" disabled={status === "loading"}>
             {status === "loading" ? "검색 중…" : "검색"}
           </button>
         </form>
 
-        <section className="results">
+        <section className="results" aria-live="polite">
           {status === "idle" && (
             <p className="hint">
-              키워드를 입력하고 검색을 누르면 최신 뉴스 10건이 발행 시각 순으로
-              나열됩니다.
+              키워드를 입력하면 발행 시각 기준 최신 뉴스 3건을 보여드립니다.
+              브리핑은 버튼을 눌렀을 때만 생성됩니다.
             </p>
           )}
 
-          {status === "error" && <p className="error">{errorMsg}</p>}
+          {status === "error" && <p className="error">{errorMessage}</p>}
 
           {status === "done" && items.length === 0 && (
             <p className="hint">
-              &lsquo;{searchedFor}&rsquo;에 대한 검색 결과가 없습니다. 다른
-              키워드로 다시 검색해 보세요.
+              &lsquo;{searchedFor}&rsquo;에 대한 검색 결과가 없습니다. 다른 키워드로
+              다시 검색해 보세요.
             </p>
           )}
 
           {status === "done" && items.length > 0 && (
-            <ol className="news-list">
-              {items.map((item, idx) => (
-                <li key={item.link + idx} className="news-item">
-                  <span className="index">{String(idx + 1).padStart(2, "0")}</span>
-                  <div className="news-body">
-                    <div className="news-meta">
-                      <span className="source">{sourceOf(item.link)}</span>
-                      <span className="dot">·</span>
-                      <span className="time">{formatPubDate(item.pubDate)}</span>
-                    </div>
-                    <a
-                      className="news-title"
-                      href={item.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      {item.title}
-                    </a>
-                    <p className="news-desc">{item.description}</p>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            <>
+              <ol className="news-list">
+                {items.map((item) => {
+                  const articleLink = item.originalLink || item.naverLink;
+                  return (
+                    <li key={item.id} className="news-item">
+                      <span className="index">{String(item.id).padStart(2, "0")}</span>
+                      <div className="news-body">
+                        <div className="news-meta">
+                          <span className="source">{sourceOf(articleLink)}</span>
+                          <span className="dot">·</span>
+                          <span className="time">{formatPubDate(item.pubDate)}</span>
+                        </div>
+                        <a
+                          className="news-title"
+                          href={articleLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {item.title}
+                        </a>
+                        <p className="news-desc">{item.description}</p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+
+              <BriefingPanel
+                key={briefingToken || `unavailable-${searchedFor}`}
+                briefingToken={briefingToken}
+                expiresAt={expiresAt}
+                items={items}
+                searchedFor={searchedFor}
+              />
+            </>
           )}
         </section>
 
         <footer className="footer">
-          <span>Powered by Naver Search API (News)</span>
+          <span>Powered by Naver Search API · Vercel AI Gateway</span>
         </footer>
       </div>
 
       <style jsx>{`
         .page {
-          max-width: 760px;
+          max-width: 800px;
           margin: 0 auto;
           padding: 56px 24px 80px;
           min-height: 100vh;
@@ -175,15 +384,13 @@ export default function Home() {
           font-family: var(--font-mono);
           font-size: 0.78rem;
           color: var(--ink-dim);
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
+          letter-spacing: 0.04em;
           margin: 0 0 10px;
         }
 
         .search-bar {
           display: flex;
           align-items: stretch;
-          gap: 0;
           border: 2px solid var(--ink);
           background: #fff;
           margin-bottom: 36px;
@@ -203,6 +410,7 @@ export default function Home() {
 
         .search-bar input {
           flex: 1;
+          min-width: 0;
           border: none;
           padding: 16px 14px;
           font-size: 1rem;
@@ -215,41 +423,49 @@ export default function Home() {
           outline: none;
         }
 
-        .search-bar button {
+        .search-bar button,
+        .briefing-button {
           border: none;
-          border-left: 2px solid var(--ink);
           background: var(--wire-red);
           color: #fff;
           font-family: var(--font-body);
           font-weight: 600;
-          padding: 0 26px;
           cursor: pointer;
           transition: background 0.15s ease;
         }
 
-        .search-bar button:hover:not(:disabled) {
+        .search-bar button {
+          border-left: 2px solid var(--ink);
+          padding: 0 26px;
+        }
+
+        .search-bar button:hover:not(:disabled),
+        .briefing-button:hover:not(:disabled) {
           background: #8f1b16;
         }
 
-        .search-bar button:disabled {
+        .search-bar button:disabled,
+        .briefing-button:disabled {
           background: var(--ink-dim);
           cursor: default;
+          opacity: 0.75;
         }
 
-        .hint {
+        .hint,
+        .error {
           font-family: var(--font-body);
-          color: var(--ink-dim);
           line-height: 1.6;
           padding: 24px 0;
           border-top: 1px solid var(--rule);
         }
 
+        .hint {
+          color: var(--ink-dim);
+        }
+
         .error {
-          font-family: var(--font-body);
           color: var(--wire-red);
           font-weight: 600;
-          padding: 24px 0;
-          border-top: 1px solid var(--rule);
         }
 
         .news-list {
@@ -317,6 +533,166 @@ export default function Home() {
           margin: 0;
         }
 
+        .briefing-panel {
+          margin-top: 38px;
+          border: 2px solid var(--ink);
+          background: #fff;
+        }
+
+        .briefing-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 24px;
+          padding: 24px;
+          background: var(--paper-dim);
+          border-bottom: 1px solid var(--ink);
+        }
+
+        .eyebrow {
+          display: block;
+          font-family: var(--font-mono);
+          color: var(--wire-red);
+          font-size: 0.68rem;
+          letter-spacing: 0.12em;
+          font-weight: 700;
+          margin-bottom: 5px;
+        }
+
+        .briefing-heading h2 {
+          font-family: var(--font-display);
+          font-size: 1.45rem;
+          margin: 0 0 6px;
+        }
+
+        .briefing-heading p,
+        .briefing-notice {
+          color: var(--ink-dim);
+          font-size: 0.86rem;
+          line-height: 1.5;
+          margin: 0;
+        }
+
+        .briefing-button {
+          flex: 0 0 auto;
+          min-width: 174px;
+          padding: 12px 16px;
+        }
+
+        .briefing-notice,
+        .briefing-progress,
+        .briefing-error,
+        .briefing-output,
+        .briefing-sources {
+          padding: 20px 24px;
+        }
+
+        .briefing-progress {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: var(--wire-navy);
+          font-weight: 600;
+        }
+
+        .progress-dot {
+          width: 9px;
+          height: 9px;
+          border-radius: 50%;
+          background: var(--wire-red);
+          animation: pulse 1.2s ease-in-out infinite;
+        }
+
+        .briefing-error {
+          color: var(--wire-red);
+          background: #fff7f5;
+        }
+
+        .briefing-error p {
+          margin: 6px 0 0;
+        }
+
+        .briefing-error ul {
+          color: var(--ink-dim);
+          margin: 14px 0 0;
+          padding-left: 20px;
+        }
+
+        .briefing-error li + li {
+          margin-top: 8px;
+        }
+
+        .briefing-error .ready {
+          color: #2f6c43;
+          font-weight: 700;
+        }
+
+        .briefing-error .failed {
+          color: var(--wire-red);
+          font-weight: 700;
+        }
+
+        .briefing-output {
+          font-family: var(--font-body);
+          line-height: 1.75;
+          overflow-wrap: anywhere;
+        }
+
+        .briefing-output :global(h2) {
+          font-family: var(--font-display);
+          font-size: 1.3rem;
+          margin-top: 1.8rem;
+          padding-bottom: 0.35rem;
+          border-bottom: 1px solid var(--rule);
+        }
+
+        .briefing-output :global(h2:first-child) {
+          margin-top: 0;
+        }
+
+        .briefing-output :global(ul) {
+          padding-left: 1.25rem;
+        }
+
+        .briefing-sources {
+          border-top: 1px solid var(--rule);
+          background: #faf9f5;
+        }
+
+        .briefing-sources h3 {
+          font-family: var(--font-mono);
+          font-size: 0.76rem;
+          letter-spacing: 0.08em;
+          margin: 0 0 12px;
+        }
+
+        .briefing-sources ol {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .briefing-sources li {
+          display: flex;
+          gap: 9px;
+          line-height: 1.45;
+          font-size: 0.86rem;
+        }
+
+        .briefing-sources li + li {
+          margin-top: 8px;
+        }
+
+        .briefing-sources span {
+          font-family: var(--font-mono);
+          color: var(--wire-red);
+        }
+
+        .briefing-sources a:hover {
+          color: var(--wire-red);
+          text-decoration: underline;
+        }
+
         .footer {
           margin-top: 48px;
           text-align: center;
@@ -326,20 +702,60 @@ export default function Home() {
           letter-spacing: 0.08em;
         }
 
+        @keyframes pulse {
+          0%,
+          100% {
+            opacity: 0.35;
+            transform: scale(0.85);
+          }
+          50% {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+
+        @media (max-width: 640px) {
+          .briefing-heading {
+            flex-direction: column;
+          }
+
+          .briefing-button {
+            width: 100%;
+          }
+        }
+
         @media (max-width: 480px) {
+          .page {
+            padding-left: 16px;
+            padding-right: 16px;
+          }
+
           .search-bar {
             flex-wrap: wrap;
           }
+
           .search-bar label {
             width: 100%;
             border-right: none;
             border-bottom: 1px solid var(--rule);
+            padding: 10px 14px;
           }
+
           .search-bar button {
             border-left: none;
             border-top: 2px solid var(--ink);
             width: 100%;
             padding: 14px;
+          }
+
+          .briefing-heading,
+          .briefing-notice,
+          .briefing-progress,
+          .briefing-error,
+          .briefing-output,
+          .briefing-sources {
+            padding-left: 17px;
+            padding-right: 17px;
           }
         }
       `}</style>
