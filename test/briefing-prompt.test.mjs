@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { publicAiErrorMessage } from "../lib/ai-errors.mjs";
+import {
+  AI_GATEWAY_CARD_URL,
+  aiErrorActionUrl,
+  aiErrorCode,
+  publicAiErrorMessage,
+} from "../lib/ai-errors.mjs";
 import {
   BRIEFING_SYSTEM_PROMPT,
   buildBriefingPrompt,
@@ -31,6 +36,23 @@ test("무료 크레딧과 호출 한도 오류를 사용자 메시지로 분류�
   assert.match(publicAiErrorMessage({ statusCode: 429 }), /무료 크레딧/);
   assert.match(publicAiErrorMessage({ statusCode: 402 }), /무료 크레딧/);
   assert.match(publicAiErrorMessage({ statusCode: 504 }), /시간이 초과/);
+});
+
+test("카드 확인이 필요한 403을 인증 오류와 구분한다", () => {
+  const error = {
+    statusCode: 403,
+    message:
+      "AI Gateway requires a valid credit card on file to service requests.",
+    cause: {
+      responseBody:
+        '{"error":{"type":"customer_verification_required"}}',
+    },
+  };
+
+  assert.equal(aiErrorCode(error), "AI_GATEWAY_CARD_REQUIRED");
+  assert.match(publicAiErrorMessage(error), /유효한 카드를 등록/);
+  assert.equal(aiErrorActionUrl(error), AI_GATEWAY_CARD_URL);
+  assert.equal(aiErrorCode({ statusCode: 403 }), "AI_GATEWAY_AUTH_ERROR");
 });
 
 test("검색 API는 네이버 결과를 3건으로 제한한다", () => {

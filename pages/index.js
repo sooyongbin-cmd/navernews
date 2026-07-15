@@ -179,6 +179,16 @@ function BriefingPanel({ briefingToken, expiresAt, items, searchedFor }) {
         <div className="briefing-error" role="alert">
           <strong>브리핑을 만들지 못했습니다.</strong>
           <p>{displayedFailure.message}</p>
+          {displayedFailure.actionUrl && (
+            <a
+              className="briefing-error-action"
+              href={displayedFailure.actionUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Vercel에서 카드 등록 및 무료 크레딧 확인
+            </a>
+          )}
           <dl className="briefing-error-meta">
             <div>
               <dt>오류 코드</dt>
@@ -700,6 +710,23 @@ export default function Home() {
 
         .briefing-error p {
           margin: 6px 0 0;
+        }
+
+        .briefing-error-action {
+          display: inline-block;
+          margin-top: 14px;
+          padding: 9px 12px;
+          border: 1px solid currentColor;
+          background: #fff;
+          color: var(--wire-red);
+          font-size: 0.82rem;
+          font-weight: 700;
+          text-decoration: none;
+        }
+
+        .briefing-error-action:hover {
+          background: var(--wire-red);
+          color: #fff;
         }
 
         .briefing-error ul {

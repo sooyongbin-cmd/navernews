@@ -66,6 +66,7 @@ test("AI 스트림의 구조화된 오류 정보를 복원한다", () => {
         message: "AI Gateway 인증을 확인할 수 없습니다.",
         status: 401,
         requestId: "request-stream",
+        actionUrl: "https://vercel.com/example-action",
       })
     )
   );
@@ -73,4 +74,5 @@ test("AI 스트림의 구조화된 오류 정보를 복원한다", () => {
   assert.equal(failure.code, "AI_GATEWAY_AUTH_ERROR");
   assert.equal(failure.status, 401);
   assert.equal(failure.requestId, "request-stream");
+  assert.equal(failure.actionUrl, "https://vercel.com/example-action");
 });

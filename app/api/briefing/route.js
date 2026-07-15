@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { streamText } from "ai";
 
 import {
+  aiErrorActionUrl,
   aiErrorCode,
   aiErrorStatus,
   publicAiErrorMessage,
@@ -96,6 +97,7 @@ export async function POST(request) {
       onError(error) {
         const status = aiErrorStatus(error);
         const code = aiErrorCode(error);
+        const actionUrl = aiErrorActionUrl(error);
         console.error("[briefing] AI stream failed", {
           requestId,
           code,
@@ -107,6 +109,7 @@ export async function POST(request) {
           message: publicAiErrorMessage(error),
           status,
           requestId,
+          actionUrl,
         });
       },
     });
@@ -150,7 +153,8 @@ export async function POST(request) {
         502,
         aiErrorCode(error),
         publicAiErrorMessage(error),
-        requestId
+        requestId,
+        { actionUrl: aiErrorActionUrl(error) }
       );
     }
 
